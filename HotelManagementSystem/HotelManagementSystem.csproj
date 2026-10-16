@@ -8,6 +8,7 @@
 
 	<ItemGroup>
 		<PackageReference Include="AutoMapper" Version="16.2.0" />
+		<PackageReference Include="Microsoft.AspNetCore.OData" Version="8.2.7" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.22">
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 			<PrivateAssets>all</PrivateAssets>
@@ -22,10 +23,8 @@
 	</ItemGroup>
 
 	<ItemGroup>
-	  <Folder Include="DTOs\" />
 	  <Folder Include="Mappers\" />
 	  <Folder Include="Repositories\" />
-	  <Folder Include="Services\" />
 	</ItemGroup>
 
 </Project>
