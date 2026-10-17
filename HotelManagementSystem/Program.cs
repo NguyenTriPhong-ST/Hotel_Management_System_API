@@ -1,4 +1,6 @@
 using HotelManagementSystem.Data;
+using HotelManagementSystem.Features.RoomTypes;
+using HotelManagementSystem.Features.Rooms;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -7,7 +9,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-
+builder.Services.AddScoped<RoomTypeService>();
+builder.Services.AddScoped<RoomService>();
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
