@@ -1,51 +1,46 @@
 ﻿
 using HotelManagementSystem.DTOs.Stays;
 using HotelManagementSystem.Services;
-// Developer: NhaNTCE181298
-// UC-F07-02 | OData 8.2.7
-// Namespace chính xác của ODataController.
-using Microsoft.AspNetCore.OData.Routing.Controllers;
 using Microsoft.AspNetCore.OData.Query;
-
+using Microsoft.AspNetCore.OData.Routing.Controllers;
 
 namespace HotelManagementSystem.Controllers;
 
 // =====================================================
-// Developer: NhaNTCE181298
-// UC: UC-F07-02 - View Stays
-// Technology: ASP.NET Core OData 8.2.7
+// Developer: NhaNT
+// UC-F07-02: View Stays
+// UC-F07-07: Search & Filter Stays
 //
-// ODATA DEMO LINKS
+// ODATA - COPY LINK TEST TRỰC TIẾP:
 //
-// 1. All Stays:
-// https://localhost:7024/odata/StayViews
-// -> Xem danh sách lưu trú.
+// Danh sách:
+// http://localhost:5142/odata/StayViews?$top=10
 //
-// 2. Filter Active:
-// https://localhost:7024/odata/StayViews?$filter=Status eq 'Active'
-// -> Chỉ lấy Stay đang hoạt động.
+// Stay đang hoạt động:
+// http://localhost:5142/odata/StayViews?$filter=Status%20eq%20'Active'
 //
-// 3. Order + Top:
-// https://localhost:7024/odata/StayViews?$orderby=Id desc&$top=5
-// -> Lấy 5 Stay có ID lớn nhất.
+// Stay đã check-out:
+// http://localhost:5142/odata/StayViews?$filter=Status%20eq%20'Completed'
 //
-// 4. Pagination:
-// https://localhost:7024/odata/StayViews?$orderby=Id desc&$skip=5&$top=5
-// -> Bỏ qua 5 bản ghi, lấy 5 bản ghi tiếp theo.
+// Tìm theo tên khách:
+// http://localhost:5142/odata/StayViews?$filter=contains(MainGuestName,'Khang')
 //
-// 5. Count:
-// https://localhost:7024/odata/StayViews?$count=true
-// -> Trả thêm @odata.count.
+// Tìm theo mã phòng:
+// http://localhost:5142/odata/StayViews?$filter=RoomCode%20eq%20'P103'
 //
-// 6. Select:
-// https://localhost:7024/odata/StayViews?$select=Id,StayCode,Status&$top=3
-// -> Chỉ lấy những trường được chọn.
+// Sắp xếp mới nhất:
+// http://localhost:5142/odata/StayViews?$orderby=Id%20desc&$top=5
 //
-// 7. OData Metadata:
-// https://localhost:7024/odata/$metadata
-// -> Xem EDM Model của API.
+// Phân trang:
+// http://localhost:5142/odata/StayViews?$skip=0&$top=10&$count=true
 //
-// NOTE: OData chỉ đọc, không thay đổi dữ liệu.
+// Chọn trường:
+// http://localhost:5142/odata/StayViews?$select=Id,StayCode,Status
+//
+// Metadata:
+// http://localhost:5142/odata/$metadata
+//
+// Chỉ đọc dữ liệu, không thay đổi Database.
 // =====================================================
 
 public class StayViewsController : ODataController
@@ -57,8 +52,9 @@ public class StayViewsController : ODataController
         _stayService = stayService;
     }
 
-    // NhaNTCE181298 | UC-F07-02 | OData
-    // Trả IQueryable để OData áp dụng truy vấn.
+    // NhaNT | UC-F07-02, UC-F07-07
+    // GET /odata/StayViews
+    // Trả IQueryable để OData lọc tại Database.
     [EnableQuery(PageSize = 20, MaxTop = 100)]
     public IQueryable<StayListDto> Get()
     {

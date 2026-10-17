@@ -6,8 +6,25 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HotelManagementSystem.Controllers;
 
+// =====================================================
 // Developer: NhaNTCE181298
 // UC-F07-05: Record Internal Payment
+//
+// SWAGGER: https://localhost:7024/swagger
+// Method: POST
+// Endpoint: /api/invoices/{invoiceId}/payments
+// Header: X-Demo-Account-Id
+// Body: RecordPaymentRequest
+//
+// 201: Thanh toán thành công.
+// 200: Gửi lại giao dịch đã tồn tại.
+// 400: Dữ liệu đầu vào không hợp lệ.
+// 403: Không có quyền thanh toán.
+// 404: Không tìm thấy Invoice.
+// 409: Xung đột hoặc vượt số tiền còn lại.
+//
+// OData: Không sử dụng.
+// =====================================================
 
 [ApiController]
 [Route("api/invoices/{invoiceId:int}/payments")]

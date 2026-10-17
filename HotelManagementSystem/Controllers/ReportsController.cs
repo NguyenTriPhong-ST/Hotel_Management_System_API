@@ -1,25 +1,25 @@
 ﻿
-using HotelManagementSystem.Data;
 using HotelManagementSystem.DTOs.Reports;
 using HotelManagementSystem.Entities.Enums;
 using HotelManagementSystem.Services;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace HotelManagementSystem.Controllers;
 
 // =====================================================
 // Developer: NhaNTCE181298
 // Module: F11 - Operational Reporting
+// Layer: Controller
+//
+// SWAGGER: https://localhost:7024/swagger
 //
 // UC-F11-01: GET /api/reports/rooms
 // UC-F11-02: GET /api/reports/reservations
 // UC-F11-03: GET /api/reports/revenue
 // UC-F11-04: GET /api/reports/tasks
 //
-// Role: Admin
-// OData: Không dùng cho các endpoint tổng hợp.
-// Authentication: Header demo trong Development.
+// Header: X-Demo-Account-Id (Admin)
+// OData: Không áp dụng cho API báo cáo tổng hợp.
 // =====================================================
 
 [ApiController]
@@ -27,39 +27,39 @@ namespace HotelManagementSystem.Controllers;
 public class ReportsController : ControllerBase
 {
     private readonly ReportService _service;
-    private readonly AppDbContext _db;
     private readonly IWebHostEnvironment _environment;
 
     public ReportsController(
         ReportService service,
-        AppDbContext db,
         IWebHostEnvironment environment)
     {
         _service = service;
-        _db = db;
         _environment = environment;
     }
 
-    // Chỉ cho Admin xem báo cáo trong Development.
+    // NhaNT | F11-01 đến F11-04
+    // Kiểm tra Admin trong môi trường Development.
     private async Task<IActionResult?> CheckAdminAsync(
         int? accountId)
     {
         if (!_environment.IsDevelopment())
+        {
             return StatusCode(503, new
             {
                 message = "Đang chờ tích hợp JWT."
             });
+        }
 
         if (!accountId.HasValue || accountId <= 0)
+        {
             return BadRequest(new
             {
                 message = "Thiếu X-Demo-Account-Id hợp lệ."
             });
+        }
 
-        var account = await _db.Accounts
-            .AsNoTracking()
-            .FirstOrDefaultAsync(a =>
-                a.Id == accountId.Value);
+        var account =
+            await _service.GetAccountAsync(accountId.Value);
 
         if (account == null ||
             !account.IsActive ||
@@ -74,34 +74,49 @@ public class ReportsController : ControllerBase
         return null;
     }
 
-    // Validate dùng chung.
+    // NhaNT | F11-01 đến F11-04
+    // Kiểm tra khoảng ngày của báo cáo.
     private IActionResult? ValidatePeriod(
         ReportPeriodQuery query)
     {
         if (query.FromDate == default ||
             query.ToDate == default)
+        {
             return BadRequest(new
             {
                 message = "Phải nhập fromDate và toDate."
             });
+        }
 
         if (query.FromDate > query.ToDate)
+        {
             return BadRequest(new
             {
-                message = "fromDate không được lớn hơn toDate."
+                message =
+                    "fromDate không được lớn hơn toDate."
             });
+        }
 
         if (query.ToDate == DateOnly.MaxValue)
+        {
             return BadRequest(new
             {
                 message = "toDate vượt giới hạn hỗ trợ."
             });
+        }
 
         return null;
     }
 
     // =================================================
-    // UC-F11-01 - ROOM REPORT
+    // Developer: NhaNTCE181298
+    // UC-F11-01: Room Report
+    //
+    // Swagger: https://localhost:7024/swagger
+    // Method: GET
+    // Endpoint: /api/reports/rooms
+    // Header: X-Demo-Account-Id
+    // Query: fromDate, toDate, roomTypeId (optional)
     // =================================================
     [HttpGet("rooms")]
     [ProducesResponseType(typeof(RoomReportDto), 200)]
@@ -118,16 +133,25 @@ public class ReportsController : ControllerBase
 
         if (query.RoomTypeId.HasValue &&
             query.RoomTypeId.Value <= 0)
+        {
             return BadRequest(new
             {
                 message = "roomTypeId phải lớn hơn 0."
             });
+        }
 
         return Ok(await _service.GetRoomsAsync(query));
     }
 
     // =================================================
-    // UC-F11-02 - RESERVATION REPORT
+    // Developer: NhaNTCE181298
+    // UC-F11-02: Reservation Report
+    //
+    // Swagger: https://localhost:7024/swagger
+    // Method: GET
+    // Endpoint: /api/reports/reservations
+    // Header: X-Demo-Account-Id
+    // Query: fromDate, toDate, status, roomTypeId
     // =================================================
     [HttpGet("reservations")]
     [ProducesResponseType(typeof(ReservationReportDto), 200)]
@@ -144,26 +168,37 @@ public class ReportsController : ControllerBase
 
         if (query.RoomTypeId.HasValue &&
             query.RoomTypeId.Value <= 0)
+        {
             return BadRequest(new
             {
                 message = "roomTypeId phải lớn hơn 0."
             });
+        }
 
         if (query.Status.HasValue &&
             !Enum.IsDefined(
                 typeof(ReservationStatus),
                 query.Status.Value))
+        {
             return BadRequest(new
             {
                 message = "ReservationStatus không hợp lệ."
             });
+        }
 
         return Ok(
             await _service.GetReservationsAsync(query));
     }
 
     // =================================================
-    // UC-F11-03 - REVENUE REPORT
+    // Developer: NhaNTCE181298
+    // UC-F11-03: Revenue Report
+    //
+    // Swagger: https://localhost:7024/swagger
+    // Method: GET
+    // Endpoint: /api/reports/revenue
+    // Header: X-Demo-Account-Id
+    // Query: fromDate, toDate, paymentMethod
     // =================================================
     [HttpGet("revenue")]
     [ProducesResponseType(typeof(RevenueReportDto), 200)]
@@ -182,16 +217,26 @@ public class ReportsController : ControllerBase
             !Enum.IsDefined(
                 typeof(PaymentMethod),
                 query.PaymentMethod.Value))
+        {
             return BadRequest(new
             {
                 message = "PaymentMethod không hợp lệ."
             });
+        }
 
         return Ok(await _service.GetRevenueAsync(query));
     }
 
     // =================================================
-    // UC-F11-04 - TASK REPORT
+    // Developer: NhaNTCE181298
+    // UC-F11-04: Task Report
+    //
+    // Swagger: https://localhost:7024/swagger
+    // Method: GET
+    // Endpoint: /api/reports/tasks
+    // Header: X-Demo-Account-Id
+    // Query: fromDate, toDate, dateField,
+    //        taskType, status, assignedToAccountId
     // =================================================
     [HttpGet("tasks")]
     [ProducesResponseType(typeof(TaskReportDto), 200)]
@@ -208,35 +253,45 @@ public class ReportsController : ControllerBase
 
         if (query.DateField != "created" &&
             query.DateField != "completed")
+        {
             return BadRequest(new
             {
-                message = "dateField phải là created hoặc completed."
+                message =
+                    "dateField phải là created hoặc completed."
             });
+        }
 
         if (query.TaskType.HasValue &&
             !Enum.IsDefined(
                 typeof(HotelTaskType),
                 query.TaskType.Value))
+        {
             return BadRequest(new
             {
                 message = "TaskType không hợp lệ."
             });
+        }
 
         if (query.Status.HasValue &&
             !Enum.IsDefined(
                 typeof(HotelTaskStatus),
                 query.Status.Value))
+        {
             return BadRequest(new
             {
                 message = "TaskStatus không hợp lệ."
             });
+        }
 
         if (query.AssignedToAccountId.HasValue &&
             query.AssignedToAccountId.Value <= 0)
+        {
             return BadRequest(new
             {
-                message = "assignedToAccountId phải lớn hơn 0."
+                message =
+                    "assignedToAccountId phải lớn hơn 0."
             });
+        }
 
         return Ok(await _service.GetTasksAsync(query));
     }
