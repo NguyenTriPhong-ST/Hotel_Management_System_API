@@ -1,4 +1,4 @@
-﻿
+
 using System.Linq.Expressions;
 using HotelManagementSystem.DTOs.ServiceUsages;
 using HotelManagementSystem.Entities;
@@ -10,14 +10,11 @@ namespace HotelManagementSystem.Mappers;
 // UC-F09-01, 02, 04: ServiceUsage Mapper
 // Chuyển Entity thành DTO, giữ nguyên giá snapshot.
 //
-// OData:
-// https://localhost:7024/odata/ServiceUsageViews?$top=10
 // =====================================================
 
 public static class ServiceUsageMapper
 {
     // NhaNT | UC-F09-02
-    // Expression giúp EF Core dịch OData thành SQL.
     public static readonly Expression<
         Func<ServiceUsage, ServiceUsageListDto>>
         ToListDto = su => new ServiceUsageListDto

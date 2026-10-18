@@ -1,4 +1,4 @@
-﻿
+
 using System.Text.Json;
 using HotelManagementSystem.DTOs.Stays;
 using HotelManagementSystem.Entities;
@@ -23,8 +23,6 @@ namespace HotelManagementSystem.Services;
 // GET  /api/stays/{id}
 // POST /api/stays/{id}/check-out
 //
-// OData:
-// http://localhost:5142/odata/StayViews?$top=10
 //
 // Xử lý nghiệp vụ qua IStayRepository.
 // =====================================================
@@ -306,29 +304,21 @@ public class StayService
     // UC-F07-02: View Stays
     // UC-F07-07: Search & Filter Stays
     //
-    // OData API:
-    // https://localhost:7024/odata/StayViews
     //
     // Test danh sách:
-    // /odata/StayViews?$top=10
     //
     // Test lọc:
-    // /odata/StayViews?$filter=Status eq 'Active'
     //
     // Test tìm theo mã:
-    // /odata/StayViews?$filter=contains(StayCode,'ST-')
     //
     // Test sắp xếp:
-    // /odata/StayViews?$orderby=CheckedInAt desc
     //
     // Test phân trang:
-    // /odata/StayViews?$skip=0&$top=10&$count=true
     // =================================================
 
     public IQueryable<StayListDto> GetStays()
     {
         // NhaNT | F07-02, F07-07
-        // Repository tạo truy vấn; OData áp dụng bộ lọc.
         return _repository.QueryStayViews();
     }
 

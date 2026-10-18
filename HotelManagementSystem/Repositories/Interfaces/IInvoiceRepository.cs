@@ -1,4 +1,4 @@
-﻿
+
 using HotelManagementSystem.Entities;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -14,7 +14,6 @@ namespace HotelManagementSystem.Repositories.Interfaces;
 // POST /api/stays/{stayId}/invoice/finalize
 //
 // Header: X-Demo-Account-Id (Development)
-// OData: Không áp dụng cho hai API POST.
 // =====================================================
 
 public interface IInvoiceRepository

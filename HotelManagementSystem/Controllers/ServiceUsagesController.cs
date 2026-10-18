@@ -3,32 +3,25 @@ using HotelManagementSystem.DTOs.ServiceUsages;
 using HotelManagementSystem.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.OData.Query;
-
 
 namespace HotelManagementSystem.Controllers;
 
 // =====================================================
 // Developer: NhaNTCE181298
-// UC: UC-F09-01 - Create Service Usage
-// Endpoint: POST /api/service-usages
-// OData: Không áp dụng cho POST.
-//
-// DEMO:
+// Module: F09 - Service Usage Management
 // Swagger: https://localhost:7024/swagger
-// Header: X-Demo-Account-Id = 2
 //
-// Account ID 2: Receptionist mẫu.
-// Account ID 1: Admin, không được phép ghi nhận.
+// UC-F09-01: POST   /HotelOps/service-usages
+// UC-F09-02: GET    /HotelOps/service-usages
+// UC-F09-03: GET    /HotelOps/service-usages/{id}
+// UC-F09-04: PUT    /HotelOps/service-usages/{id}
+// UC-F09-05: DELETE /HotelOps/service-usages/{id}
 //
-// NOTE: Header demo chỉ dùng trong Development.
+// Header ghi dữ liệu: X-Demo-Account-Id
 // =====================================================
 
-
-
-
 [ApiController]
-[Route("api/service-usages")]
+[Route("HotelOps/service-usages")]
 public class ServiceUsagesController : ControllerBase
 {
     private readonly ServiceUsageService _service;
@@ -42,15 +35,24 @@ public class ServiceUsagesController : ControllerBase
         _environment = environment;
     }
 
-    // NhaNTCE181298 | UC-F09-01
-    // Ghi nhận một lượt sử dụng dịch vụ.
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-01: Create Service Usage
+    // POST /HotelOps/service-usages
+    // Body: CreateServiceUsageRequest
+    // Header: X-Demo-Account-Id
+    // =================================================
     [HttpPost]
+    [ProducesResponseType(typeof(CreateServiceUsageResponse), 201)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
     public async Task<IActionResult> Create(
         [FromBody] CreateServiceUsageRequest request,
         [FromHeader(Name = "X-Demo-Account-Id")]
         int? demoAccountId)
     {
-        // Không cho dùng cơ chế header demo ở Production.
         if (!_environment.IsDevelopment())
         {
             return StatusCode(503, new
@@ -59,7 +61,8 @@ public class ServiceUsagesController : ControllerBase
             });
         }
 
-        if (!demoAccountId.HasValue || demoAccountId <= 0)
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
         {
             return BadRequest(new
             {
@@ -70,7 +73,8 @@ public class ServiceUsagesController : ControllerBase
         try
         {
             var result = await _service.CreateAsync(
-                request, demoAccountId.Value);
+                request,
+                demoAccountId.Value);
 
             return StatusCode(201, result);
         }
@@ -92,76 +96,155 @@ public class ServiceUsagesController : ControllerBase
         {
             return Conflict(new
             {
-                message = "Không thể ghi nhận dịch vụ do xung đột dữ liệu."
+                message = "Xung đột dữ liệu khi ghi nhận dịch vụ."
             });
         }
     }
 
-    // =====================================================
+    // =================================================
     // Developer: NhaNTCE181298
-    // UC: UC-F09-02 - View Service Usages
-    // Endpoint: GET /api/service-usages
-    // OData: $filter, $orderby, $top, $skip, $select
-    // =====================================================
-
+    // UC-F09-02: View Service Usages
+    // GET /HotelOps/service-usages
+    //
+    // Query: search, stayId, hotelServiceId,
+    //        page, pageSize, sort
+    //
+    // GET /HotelOps/service-usages?page=1&pageSize=20
+    // GET /HotelOps/service-usages?stayId=20
+    // GET /HotelOps/service-usages?hotelServiceId=1
+    // GET /HotelOps/service-usages?search=P101
+    // GET /HotelOps/service-usages?sort=oldest
+    // =================================================
     [HttpGet]
-    [EnableQuery(PageSize = 20, MaxTop = 100)]
-    public IQueryable<ServiceUsageListDto> GetServiceUsages()
+    [ProducesResponseType(200)]
+    [ProducesResponseType(400)]
+    public async Task<IActionResult> GetServiceUsages(
+        [FromQuery] string? search,
+        [FromQuery] int? stayId,
+        [FromQuery] int? hotelServiceId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string sort = "newest")
     {
-        // API chỉ đọc, không thay đổi Database.
-        return _service.GetServiceUsages();
+        if (page < 1)
+        {
+            return BadRequest(new
+            {
+                message = "page phải lớn hơn hoặc bằng 1."
+            });
+        }
+
+        if (pageSize < 1 || pageSize > 100)
+        {
+            return BadRequest(new
+            {
+                message = "pageSize phải từ 1 đến 100."
+            });
+        }
+
+        if (stayId.HasValue && stayId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "stayId phải lớn hơn 0."
+            });
+        }
+
+        if (hotelServiceId.HasValue &&
+            hotelServiceId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "hotelServiceId phải lớn hơn 0."
+            });
+        }
+
+        var offset = ((long)page - 1) * pageSize;
+
+        if (offset > int.MaxValue)
+        {
+            return BadRequest(new
+            {
+                message = "page vượt giới hạn phân trang."
+            });
+        }
+
+        var normalizedSort = (sort ?? "newest")
+            .Trim()
+            .ToLowerInvariant();
+
+        if (normalizedSort != "newest" &&
+            normalizedSort != "oldest")
+        {
+            return BadRequest(new
+            {
+                message = "sort chỉ nhận newest hoặc oldest."
+            });
+        }
+
+        var query = _service.GetServiceUsages();
+
+        // NhaNT | F09-02
+        // Lọc lượt sử dụng theo Stay.
+        if (stayId.HasValue)
+        {
+            query = query.Where(x =>
+                x.StayId == stayId.Value);
+        }
+
+        // NhaNT | F09-02
+        // Lọc theo dịch vụ khách sạn.
+        if (hotelServiceId.HasValue)
+        {
+            query = query.Where(x =>
+                x.HotelServiceId == hotelServiceId.Value);
+        }
+
+        // NhaNT | F09-02
+        // Tìm theo mã Stay, phòng và tên dịch vụ.
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim();
+
+            query = query.Where(x =>
+                x.StayCode.Contains(keyword) ||
+                x.RoomCode.Contains(keyword) ||
+                x.ServiceName.Contains(keyword));
+        }
+
+        // NhaNT | F09-02
+        // Sắp xếp và phân trang tại Database.
+        query = normalizedSort == "oldest"
+            ? query.OrderBy(x => x.Id)
+            : query.OrderByDescending(x => x.Id);
+
+        var totalItems = await query.CountAsync();
+
+        var items = await query
+            .Skip((int)offset)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return Ok(new
+        {
+            items,
+            totalItems,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling(
+                totalItems / (double)pageSize)
+        });
     }
 
-
-    /*
-     * =====================================================
-     * Developer: NhaNTCE181298
-     * UC: UC-F09-03 - View Service Usage Details
-     * Endpoint: GET /api/service-usages/{id}
-     *
-     * DEMO LINKS:
-     *
-     * https://localhost:7024/api/service-usages/58
-     * -> Dịch vụ ăn sáng của Stay 20, 180.000 VND.
-     *
-     * https://localhost:7024/api/service-usages/1
-     * -> Dịch vụ lịch sử của Stay 1, 85.000 VND.
-     *
-     * https://localhost:7024/api/service-usages/99999
-     * -> Kiểm tra HTTP 404 Not Found.
-     *
-     * NOTE:
-     * - Chỉ hiển thị ServiceUsage chưa soft-delete.
-     * - Giá sử dụng là snapshot, không phải giá hiện tại.
-     * - OData không áp dụng cho GET chi tiết theo ID.
-     * =====================================================
-     */
-
-    // =====================================================
+    // =================================================
     // Developer: NhaNTCE181298
-    // UC: UC-F09-03 - View Service Usage Details
-    // Endpoint: GET /api/service-usages/{id}
-    //
-    // DEMO LINKS:
-    //
-    // https://localhost:7024/api/service-usages/58
-    // -> Dịch vụ ăn sáng vừa tạo cho Stay 20.
-    //
-    // https://localhost:7024/api/service-usages/1
-    // -> Dịch vụ mẫu của Stay đã hoàn thành.
-    //
-    // https://localhost:7024/api/service-usages/99999
-    // -> Kiểm tra HTTP 404.
-    //
-    // OData: Không áp dụng cho API chi tiết.
-    // =====================================================
-
+    // UC-F09-03: View Service Usage Details
+    // GET /HotelOps/service-usages/{id}
+    // =================================================
     [HttpGet("{id:int}")]
-    [ProducesResponseType(
-        typeof(ServiceUsageDetailDto),
-        StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ServiceUsageDetailDto), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(404)]
     public async Task<IActionResult> GetDetail(int id)
     {
         if (id <= 0)
@@ -185,14 +268,13 @@ public class ServiceUsagesController : ControllerBase
         return Ok(result);
     }
 
-
-    // =====================================================
+    // =================================================
     // Developer: NhaNTCE181298
     // UC-F09-04: Update Service Usage
-    // Endpoint: PUT /api/service-usages/{id}
-    // OData: Không sử dụng cho PUT.
-    // =====================================================
-
+    // PUT /HotelOps/service-usages/{id}
+    // Body: UpdateServiceUsageRequest
+    // Header: X-Demo-Account-Id
+    // =================================================
     [HttpPut("{id:int}")]
     [ProducesResponseType(typeof(CreateServiceUsageResponse), 200)]
     [ProducesResponseType(400)]
@@ -203,30 +285,39 @@ public class ServiceUsagesController : ControllerBase
         int id,
         [FromBody] UpdateServiceUsageRequest request,
         [FromHeader(Name = "X-Demo-Account-Id")]
-    int? demoAccountId)
+        int? demoAccountId)
     {
         if (!_environment.IsDevelopment())
+        {
             return StatusCode(503, new
             {
                 message = "API đang chờ tích hợp JWT."
             });
+        }
 
-        if (!demoAccountId.HasValue || demoAccountId <= 0)
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
             return BadRequest(new
             {
                 message = "Thiếu X-Demo-Account-Id hợp lệ."
             });
+        }
 
         if (id <= 0)
+        {
             return BadRequest(new
             {
                 message = "ServiceUsage ID phải lớn hơn 0."
             });
+        }
 
         try
         {
             var result = await _service.UpdateAsync(
-                id, request, demoAccountId.Value);
+                id,
+                request,
+                demoAccountId.Value);
 
             return Ok(result);
         }
@@ -253,13 +344,13 @@ public class ServiceUsagesController : ControllerBase
         }
     }
 
-    // =====================================================
+    // =================================================
     // Developer: NhaNTCE181298
     // UC-F09-05: Delete Service Usage
-    // Endpoint: DELETE /api/service-usages/{id}
-    // OData: Không sử dụng cho DELETE.
-    // =====================================================
-
+    // DELETE /HotelOps/service-usages/{id}
+    // Header: X-Demo-Account-Id
+    // Xóa mềm, không xóa vật lý dữ liệu.
+    // =================================================
     [HttpDelete("{id:int}")]
     [ProducesResponseType(204)]
     [ProducesResponseType(400)]
@@ -269,30 +360,38 @@ public class ServiceUsagesController : ControllerBase
     public async Task<IActionResult> Delete(
         int id,
         [FromHeader(Name = "X-Demo-Account-Id")]
-    int? demoAccountId)
+        int? demoAccountId)
     {
         if (!_environment.IsDevelopment())
+        {
             return StatusCode(503, new
             {
                 message = "API đang chờ tích hợp JWT."
             });
+        }
 
-        if (!demoAccountId.HasValue || demoAccountId <= 0)
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
             return BadRequest(new
             {
                 message = "Thiếu X-Demo-Account-Id hợp lệ."
             });
+        }
 
         if (id <= 0)
+        {
             return BadRequest(new
             {
                 message = "ServiceUsage ID phải lớn hơn 0."
             });
+        }
 
         try
         {
             await _service.DeleteAsync(
-                id, demoAccountId.Value);
+                id,
+                demoAccountId.Value);
 
             return NoContent();
         }
@@ -318,6 +417,4 @@ public class ServiceUsagesController : ControllerBase
             });
         }
     }
-
-
 }

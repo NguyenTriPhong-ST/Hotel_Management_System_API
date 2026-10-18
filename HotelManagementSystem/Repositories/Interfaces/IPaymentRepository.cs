@@ -1,4 +1,4 @@
-﻿
+
 using HotelManagementSystem.Entities;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -11,7 +11,6 @@ namespace HotelManagementSystem.Repositories.Interfaces;
 //
 // Swagger: https://localhost:7024/swagger
 // POST /api/invoices/{invoiceId}/payments
-// OData: Không áp dụng cho POST.
 // =====================================================
 
 public interface IPaymentRepository

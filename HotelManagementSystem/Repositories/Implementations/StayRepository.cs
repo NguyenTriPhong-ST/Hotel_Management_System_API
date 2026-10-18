@@ -1,4 +1,4 @@
-﻿
+
 using System.Data;
 using HotelManagementSystem.Data;
 using HotelManagementSystem.DTOs.Stays;
@@ -20,10 +20,6 @@ namespace HotelManagementSystem.Repositories.Implementations;
 // UC-F07-06: Cập nhật dữ liệu trả phòng.
 // UC-F07-07: Truy vấn lọc và tìm kiếm.
 //
-// OData test:
-// http://localhost:5142/odata/StayViews?$top=10
-// http://localhost:5142/odata/StayViews?$filter=Status%20eq%20'Active'
-// http://localhost:5142/odata/StayViews?$orderby=Id%20desc
 //
 // Repository chỉ truy cập dữ liệu bằng EF Core.
 // =====================================================
@@ -123,15 +119,9 @@ public class StayRepository : IStayRepository
     // =================================================
     // NhaNT | F07-02, F07-07 - View/Search Stays
     //
-    // API: GET /odata/StayViews
     //
     // Test:
-    // /odata/StayViews?$filter=Status eq 'Active'
-    // /odata/StayViews?$orderby=CheckedInAt desc
-    // /odata/StayViews?$skip=0&$top=10
-    // /odata/StayViews?$count=true
     //
-    // IQueryable giúp OData truy vấn trên SQL Server.
     // =================================================
     public IQueryable<StayListDto> QueryStayViews()
     {

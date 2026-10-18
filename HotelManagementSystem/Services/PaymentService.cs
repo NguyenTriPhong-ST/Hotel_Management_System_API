@@ -1,4 +1,4 @@
-﻿
+
 using System.Text.Json;
 using HotelManagementSystem.DTOs.Payments;
 using HotelManagementSystem.Entities;
@@ -21,7 +21,6 @@ namespace HotelManagementSystem.Services;
 //
 // 201: Ghi nhận thanh toán mới.
 // 200: Giao dịch đã được ghi nhận trước đó.
-// OData: Không áp dụng cho POST.
 // =====================================================
 
 public class PaymentService

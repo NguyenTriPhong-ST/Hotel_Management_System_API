@@ -1,4 +1,4 @@
-﻿
+
 using HotelManagementSystem.DTOs.ServiceUsages;
 using HotelManagementSystem.Entities;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -11,7 +11,6 @@ namespace HotelManagementSystem.Repositories.Interfaces;
 // Layer: Repository Interface
 //
 // Swagger: https://localhost:7024/swagger
-// OData: https://localhost:7024/odata/ServiceUsageViews?$top=10
 // =====================================================
 
 public interface IServiceUsageRepository
@@ -34,7 +33,6 @@ public interface IServiceUsageRepository
     // NhaNT | F09-01 - Thêm lượt sử dụng.
     void AddUsage(ServiceUsage usage);
 
-    // NhaNT | F09-02 - IQueryable phục vụ OData.
     IQueryable<ServiceUsageListDto> QueryUsageViews();
 
     // NhaNT | F09-03 - Chi tiết lượt sử dụng.

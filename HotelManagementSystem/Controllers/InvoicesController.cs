@@ -8,12 +8,17 @@ namespace HotelManagementSystem.Controllers;
 
 // =====================================================
 // Developer: NhaNTCE181298
+// Module: F07 - Invoice Management
 // UC-F07-04: Calculate & Finalize Invoice
-// OData: Không sử dụng cho thao tác nghiệp vụ.
+//
+// Swagger: https://localhost:7024/swagger
+// POST /HotelOps/stays/{stayId}/invoice/calculate
+// POST /HotelOps/stays/{stayId}/invoice/finalize
+// Header: X-Demo-Account-Id
 // =====================================================
 
 [ApiController]
-[Route("api/stays/{stayId:int}/invoice")]
+[Route("HotelOps/stays/{stayId:int}/invoice")]
 public class InvoicesController : ControllerBase
 {
     private readonly InvoiceService _service;
@@ -27,8 +32,11 @@ public class InvoicesController : ControllerBase
         _environment = environment;
     }
 
-    // POST /api/stays/20/invoice/calculate
-    // NhaNTCE181298 | UC-F07-04
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-04: Calculate Invoice
+    // POST /HotelOps/stays/{stayId}/invoice/calculate
+    // =================================================
     [HttpPost("calculate")]
     [ProducesResponseType(typeof(InvoiceResultDto), 200)]
     [ProducesResponseType(400)]
@@ -41,21 +49,27 @@ public class InvoicesController : ControllerBase
         int? demoAccountId)
     {
         if (!_environment.IsDevelopment())
+        {
             return StatusCode(503, new
             {
                 message = "API đang chờ tích hợp JWT."
             });
+        }
 
-        if (!demoAccountId.HasValue || demoAccountId <= 0)
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
             return BadRequest(new
             {
                 message = "Thiếu X-Demo-Account-Id hợp lệ."
             });
+        }
 
         try
         {
             var result = await _service.CalculateAsync(
-                stayId, demoAccountId.Value);
+                stayId,
+                demoAccountId.Value);
 
             return Ok(result);
         }
@@ -82,8 +96,11 @@ public class InvoicesController : ControllerBase
         }
     }
 
-    // POST /api/stays/20/invoice/finalize
-    // NhaNTCE181298 | UC-F07-04
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-04: Finalize Invoice
+    // POST /HotelOps/stays/{stayId}/invoice/finalize
+    // =================================================
     [HttpPost("finalize")]
     [ProducesResponseType(typeof(InvoiceResultDto), 200)]
     [ProducesResponseType(400)]
@@ -96,21 +113,27 @@ public class InvoicesController : ControllerBase
         int? demoAccountId)
     {
         if (!_environment.IsDevelopment())
+        {
             return StatusCode(503, new
             {
                 message = "API đang chờ tích hợp JWT."
             });
+        }
 
-        if (!demoAccountId.HasValue || demoAccountId <= 0)
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
             return BadRequest(new
             {
                 message = "Thiếu X-Demo-Account-Id hợp lệ."
             });
+        }
 
         try
         {
             var result = await _service.FinalizeAsync(
-                stayId, demoAccountId.Value);
+                stayId,
+                demoAccountId.Value);
 
             return Ok(result);
         }

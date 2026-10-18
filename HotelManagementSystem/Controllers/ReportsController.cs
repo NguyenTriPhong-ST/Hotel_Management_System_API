@@ -9,21 +9,18 @@ namespace HotelManagementSystem.Controllers;
 // =====================================================
 // Developer: NhaNTCE181298
 // Module: F11 - Operational Reporting
-// Layer: Controller
+// Swagger: https://localhost:7024/swagger
 //
-// SWAGGER: https://localhost:7024/swagger
-//
-// UC-F11-01: GET /api/reports/rooms
-// UC-F11-02: GET /api/reports/reservations
-// UC-F11-03: GET /api/reports/revenue
-// UC-F11-04: GET /api/reports/tasks
+// UC-F11-01: GET /HotelOps/reports/rooms
+// UC-F11-02: GET /HotelOps/reports/reservations
+// UC-F11-03: GET /HotelOps/reports/revenue
+// UC-F11-04: GET /HotelOps/reports/tasks
 //
 // Header: X-Demo-Account-Id (Admin)
-// OData: Không áp dụng cho API báo cáo tổng hợp.
 // =====================================================
 
 [ApiController]
-[Route("api/reports")]
+[Route("HotelOps/reports")]
 public class ReportsController : ControllerBase
 {
     private readonly ReportService _service;
@@ -38,7 +35,7 @@ public class ReportsController : ControllerBase
     }
 
     // NhaNT | F11-01 đến F11-04
-    // Kiểm tra Admin trong môi trường Development.
+    // Kiểm tra quyền Admin trong môi trường Development.
     private async Task<IActionResult?> CheckAdminAsync(
         int? accountId)
     {
@@ -58,8 +55,8 @@ public class ReportsController : ControllerBase
             });
         }
 
-        var account =
-            await _service.GetAccountAsync(accountId.Value);
+        var account = await _service.GetAccountAsync(
+            accountId.Value);
 
         if (account == null ||
             !account.IsActive ||
@@ -75,7 +72,7 @@ public class ReportsController : ControllerBase
     }
 
     // NhaNT | F11-01 đến F11-04
-    // Kiểm tra khoảng ngày của báo cáo.
+    // Kiểm tra khoảng thời gian báo cáo.
     private IActionResult? ValidatePeriod(
         ReportPeriodQuery query)
     {
@@ -92,8 +89,7 @@ public class ReportsController : ControllerBase
         {
             return BadRequest(new
             {
-                message =
-                    "fromDate không được lớn hơn toDate."
+                message = "fromDate không được lớn hơn toDate."
             });
         }
 
@@ -111,12 +107,9 @@ public class ReportsController : ControllerBase
     // =================================================
     // Developer: NhaNTCE181298
     // UC-F11-01: Room Report
-    //
-    // Swagger: https://localhost:7024/swagger
-    // Method: GET
-    // Endpoint: /api/reports/rooms
+    // GET /HotelOps/reports/rooms
     // Header: X-Demo-Account-Id
-    // Query: fromDate, toDate, roomTypeId (optional)
+    // Query: fromDate, toDate, roomTypeId
     // =================================================
     [HttpGet("rooms")]
     [ProducesResponseType(typeof(RoomReportDto), 200)]
@@ -126,10 +119,12 @@ public class ReportsController : ControllerBase
         int? accountId)
     {
         var auth = await CheckAdminAsync(accountId);
-        if (auth != null) return auth;
+        if (auth != null)
+            return auth;
 
         var error = ValidatePeriod(query);
-        if (error != null) return error;
+        if (error != null)
+            return error;
 
         if (query.RoomTypeId.HasValue &&
             query.RoomTypeId.Value <= 0)
@@ -146,10 +141,7 @@ public class ReportsController : ControllerBase
     // =================================================
     // Developer: NhaNTCE181298
     // UC-F11-02: Reservation Report
-    //
-    // Swagger: https://localhost:7024/swagger
-    // Method: GET
-    // Endpoint: /api/reports/reservations
+    // GET /HotelOps/reports/reservations
     // Header: X-Demo-Account-Id
     // Query: fromDate, toDate, status, roomTypeId
     // =================================================
@@ -161,10 +153,12 @@ public class ReportsController : ControllerBase
         int? accountId)
     {
         var auth = await CheckAdminAsync(accountId);
-        if (auth != null) return auth;
+        if (auth != null)
+            return auth;
 
         var error = ValidatePeriod(query);
-        if (error != null) return error;
+        if (error != null)
+            return error;
 
         if (query.RoomTypeId.HasValue &&
             query.RoomTypeId.Value <= 0)
@@ -186,17 +180,13 @@ public class ReportsController : ControllerBase
             });
         }
 
-        return Ok(
-            await _service.GetReservationsAsync(query));
+        return Ok(await _service.GetReservationsAsync(query));
     }
 
     // =================================================
     // Developer: NhaNTCE181298
     // UC-F11-03: Revenue Report
-    //
-    // Swagger: https://localhost:7024/swagger
-    // Method: GET
-    // Endpoint: /api/reports/revenue
+    // GET /HotelOps/reports/revenue
     // Header: X-Demo-Account-Id
     // Query: fromDate, toDate, paymentMethod
     // =================================================
@@ -208,10 +198,12 @@ public class ReportsController : ControllerBase
         int? accountId)
     {
         var auth = await CheckAdminAsync(accountId);
-        if (auth != null) return auth;
+        if (auth != null)
+            return auth;
 
         var error = ValidatePeriod(query);
-        if (error != null) return error;
+        if (error != null)
+            return error;
 
         if (query.PaymentMethod.HasValue &&
             !Enum.IsDefined(
@@ -230,10 +222,7 @@ public class ReportsController : ControllerBase
     // =================================================
     // Developer: NhaNTCE181298
     // UC-F11-04: Task Report
-    //
-    // Swagger: https://localhost:7024/swagger
-    // Method: GET
-    // Endpoint: /api/reports/tasks
+    // GET /HotelOps/reports/tasks
     // Header: X-Demo-Account-Id
     // Query: fromDate, toDate, dateField,
     //        taskType, status, assignedToAccountId
@@ -246,18 +235,19 @@ public class ReportsController : ControllerBase
         int? accountId)
     {
         var auth = await CheckAdminAsync(accountId);
-        if (auth != null) return auth;
+        if (auth != null)
+            return auth;
 
         var error = ValidatePeriod(query);
-        if (error != null) return error;
+        if (error != null)
+            return error;
 
         if (query.DateField != "created" &&
             query.DateField != "completed")
         {
             return BadRequest(new
             {
-                message =
-                    "dateField phải là created hoặc completed."
+                message = "dateField phải là created hoặc completed."
             });
         }
 
@@ -288,8 +278,7 @@ public class ReportsController : ControllerBase
         {
             return BadRequest(new
             {
-                message =
-                    "assignedToAccountId phải lớn hơn 0."
+                message = "assignedToAccountId phải lớn hơn 0."
             });
         }
 

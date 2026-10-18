@@ -2,38 +2,24 @@
 using HotelManagementSystem.DTOs.Stays;
 using HotelManagementSystem.Services;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.OData.Query;
 using Microsoft.EntityFrameworkCore;
 
 namespace HotelManagementSystem.Controllers;
 
 // =====================================================
-// Developer: NhaNT
+// Developer: NhaNTCE181298
 // Module: F07 - Stay Management
+// Swagger: https://localhost:7024/swagger
 //
-// SWAGGER: https://localhost:7024/swagger
-//
-// UC-F07-01: Check-in
-// POST /api/stays/check-in
-//
-// UC-F07-02: View Stays
-// GET /api/stays
-//
-// UC-F07-03: View Stay Detail
-// GET /api/stays/{id}
-//
-// UC-F07-06: Check-out
-// POST /api/stays/{id}/check-out
-//
-// UC-F07-07: Search & Filter Stays
-// GET /odata/StayViews
-//
-// Header POST: X-Demo-Account-Id
-// Chỉ dùng header demo khi chưa tích hợp JWT F01.
+// UC-F07-01: POST /HotelOps/stays/check-in
+// UC-F07-02: GET  /HotelOps/stays
+// UC-F07-03: GET  /HotelOps/stays/{id}
+// UC-F07-06: POST /HotelOps/stays/{id}/check-out
+// UC-F07-07: GET  /HotelOps/stays (search/filter)
 // =====================================================
 
 [ApiController]
-[Route("api/stays")]
+[Route("HotelOps/stays")]
 public class StaysController : ControllerBase
 {
     private readonly StayService _stayService;
@@ -48,16 +34,11 @@ public class StaysController : ControllerBase
     }
 
     // =================================================
-    // Developer: NhaNT
+    // Developer: NhaNTCE181298
     // UC-F07-01: Check-in
-    //
-    // Swagger: https://localhost:7024/swagger
-    // Method: POST
-    // Endpoint: /api/stays/check-in
+    // POST /HotelOps/stays/check-in
     // Header: X-Demo-Account-Id
     // Body: CheckInRequest
-    //
-    // Tạo Stay, StayGuests và cập nhật Reservation.
     // =================================================
     [HttpPost("check-in")]
     public async Task<IActionResult> CheckIn(
@@ -65,8 +46,6 @@ public class StaysController : ControllerBase
         [FromHeader(Name = "X-Demo-Account-Id")]
         int? demoAccountId)
     {
-        // NhaNT | F07-01
-        // Chờ JWT F01, header demo chỉ chạy Development.
         if (!_environment.IsDevelopment())
         {
             return StatusCode(503, new
@@ -75,23 +54,18 @@ public class StaysController : ControllerBase
             });
         }
 
-        // NhaNT | F07-01
-        // Yêu cầu Account ID của Receptionist.
-        if (demoAccountId == null || demoAccountId <= 0)
+        if (!demoAccountId.HasValue || demoAccountId.Value <= 0)
         {
             return BadRequest(new
             {
-                message =
-                    "Cần truyền X-Demo-Account-Id " +
-                    "của Receptionist để kiểm thử."
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
             });
         }
 
         try
         {
             var result = await _stayService.CheckInAsync(
-                request,
-                demoAccountId.Value);
+                request, demoAccountId.Value);
 
             return Ok(result);
         }
@@ -106,55 +80,141 @@ public class StaysController : ControllerBase
         {
             return Conflict(new
             {
-                message =
-                    "Dữ liệu đã được cập nhật bởi " +
-                    "một thao tác khác. Vui lòng thử lại."
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
             });
         }
         catch (DbUpdateException)
         {
             return Conflict(new
             {
-                message =
-                    "Dữ liệu bị xung đột hoặc " +
-                    "không thỏa mãn ràng buộc Database."
+                message = "Xung đột dữ liệu khi check-in."
             });
         }
     }
 
     // =================================================
-    // Developer: NhaNT
+    // Developer: NhaNTCE181298
     // UC-F07-02: View Stays
+    // UC-F07-07: Search & Filter Stays
+    // GET /HotelOps/stays
     //
-    // Swagger: https://localhost:7024/swagger
-    // Method: GET
-    // Endpoint: /api/stays
+    // Query: search, status, page, pageSize, sort
     //
-    // OData chuyên dụng:
-    // http://localhost:5142/odata/StayViews?$top=10
+    // Ví dụ:
+    // GET /HotelOps/stays?page=1&pageSize=20
+    // GET /HotelOps/stays?status=Active
+    // GET /HotelOps/stays?search=ST-001
+    // GET /HotelOps/stays?sort=oldest
     // =================================================
     [HttpGet]
-    [EnableQuery(PageSize = 20, MaxTop = 100)]
-    public IQueryable<StayListDto> GetStays()
+    public async Task<IActionResult> GetStays(
+        [FromQuery] string? search,
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string sort = "newest")
     {
-        return _stayService.GetStays();
+        if (page < 1)
+        {
+            return BadRequest(new
+            {
+                message = "page phải lớn hơn hoặc bằng 1."
+            });
+        }
+
+        if (pageSize < 1 || pageSize > 100)
+        {
+            return BadRequest(new
+            {
+                message = "pageSize phải từ 1 đến 100."
+            });
+        }
+
+        var query = _stayService.GetStays();
+
+        // NhaNT | F07-07 - Tìm mã Stay, phòng hoặc tên khách.
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim();
+
+            query = query.Where(s =>
+                s.StayCode.Contains(keyword) ||
+                s.ReservationCode.Contains(keyword) ||
+                s.RoomCode.Contains(keyword) ||
+                s.MainGuestName.Contains(keyword));
+        }
+
+        // NhaNT | F07-07 - Lọc trạng thái Stay.
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            var normalizedStatus = status.Trim();
+
+            if (!normalizedStatus.Equals(
+                    "Active", StringComparison.OrdinalIgnoreCase) &&
+                !normalizedStatus.Equals(
+                    "Completed", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new
+                {
+                    message = "status chỉ nhận Active hoặc Completed."
+                });
+            }
+
+            var expectedStatus =
+                normalizedStatus.Equals(
+                    "Active", StringComparison.OrdinalIgnoreCase)
+                    ? "Active"
+                    : "Completed";
+
+            query = query.Where(s => s.Status == expectedStatus);
+        }
+
+        // NhaNT | F07-07 - Sắp xếp có thứ tự ổn định.
+        var normalizedSort = sort.Trim().ToLowerInvariant();
+
+        query = normalizedSort switch
+        {
+            "newest" => query.OrderByDescending(s => s.Id),
+            "oldest" => query.OrderBy(s => s.Id),
+            _ => query.OrderByDescending(s => s.Id)
+        };
+
+        if (normalizedSort != "newest" &&
+            normalizedSort != "oldest")
+        {
+            return BadRequest(new
+            {
+                message = "sort chỉ nhận newest hoặc oldest."
+            });
+        }
+
+        var totalItems = await query.CountAsync();
+
+        var items = await query
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return Ok(new
+        {
+            items,
+            totalItems,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling(
+                totalItems / (double)pageSize)
+        });
     }
 
     // =================================================
-    // Developer: NhaNT
+    // Developer: NhaNTCE181298
     // UC-F07-03: View Stay Detail
-    //
-    // Swagger: https://localhost:7024/swagger
-    // Method: GET
-    // Endpoint: /api/stays/{id}
-    // Input: id = ID của Stay
-    //
-    // Kết quả: Stay, khách lưu trú và dịch vụ.
+    // GET /HotelOps/stays/{id}
+    // Input: id của Stay.
     // =================================================
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetStayDetail(int id)
     {
-        // NhaNT | F07-03 - Kiểm tra ID.
         if (id <= 0)
         {
             return BadRequest(new
@@ -177,18 +237,11 @@ public class StaysController : ControllerBase
     }
 
     // =================================================
-    // Developer: NhaNT
+    // Developer: NhaNTCE181298
     // UC-F07-06: Check-out
-    //
-    // Swagger: https://localhost:7024/swagger
-    // Method: POST
-    // Endpoint: /api/stays/{id}/check-out
+    // POST /HotelOps/stays/{id}/check-out
     // Header: X-Demo-Account-Id
-    // Input: id = ID của Stay
-    // Body: Không có
-    //
-    // Điều kiện: Invoice Finalized và đã thanh toán đủ.
-    // Kết quả: Check-out, cập nhật trạng thái phòng.
+    // Điều kiện: Invoice Finalized và thanh toán đủ.
     // =================================================
     [HttpPost("{id:int}/check-out")]
     [ProducesResponseType(typeof(CheckOutResponse), 200)]
@@ -201,8 +254,6 @@ public class StaysController : ControllerBase
         [FromHeader(Name = "X-Demo-Account-Id")]
         int? accountId)
     {
-        // NhaNT | F07-06
-        // Header demo chỉ dùng trong Development.
         if (!_environment.IsDevelopment())
         {
             return StatusCode(503, new
@@ -211,7 +262,7 @@ public class StaysController : ControllerBase
             });
         }
 
-        if (!accountId.HasValue || accountId <= 0)
+        if (!accountId.HasValue || accountId.Value <= 0)
         {
             return BadRequest(new
             {
@@ -222,10 +273,16 @@ public class StaysController : ControllerBase
         try
         {
             var result = await _stayService.CheckOutAsync(
-                id,
-                accountId.Value);
+                id, accountId.Value);
 
             return Ok(result);
+        }
+        catch (StayBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
         }
         catch (InvoiceBusinessException ex)
         {
@@ -238,15 +295,14 @@ public class StaysController : ControllerBase
         {
             return Conflict(new
             {
-                message =
-                    "Dữ liệu đã thay đổi, vui lòng thử lại."
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
             });
         }
         catch (DbUpdateException)
         {
             return Conflict(new
             {
-                message = "Xung đột dữ liệu check-out."
+                message = "Xung đột dữ liệu khi check-out."
             });
         }
     }

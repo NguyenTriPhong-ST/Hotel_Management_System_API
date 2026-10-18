@@ -1,11 +1,10 @@
-﻿
+
 namespace HotelManagementSystem.DTOs.Stays;
 
 // =====================================================
 // Developer: NhaNTCE181298
 // UC: UC-F07-03 - View Stay Details
 // Mô tả: DTO trả thông tin chi tiết một Stay.
-// OData: Không sử dụng vì truy vấn theo ID.
 // =====================================================
 
 public class StayDetailDto

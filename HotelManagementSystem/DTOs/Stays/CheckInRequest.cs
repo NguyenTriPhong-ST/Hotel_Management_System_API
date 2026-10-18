@@ -1,4 +1,4 @@
-﻿
+
 using System.ComponentModel.DataAnnotations;
 
 namespace HotelManagementSystem.DTOs.Stays;
@@ -8,7 +8,6 @@ namespace HotelManagementSystem.DTOs.Stays;
 // UC: UC-F07-01 - Check-in
 // Mô tả: Nhận thông tin đặt phòng và danh sách
 // khách thực tế đến nhận phòng.
-// OData: Không sử dụng vì đây là API POST.
 // =====================================================
 
 public class CheckInRequest

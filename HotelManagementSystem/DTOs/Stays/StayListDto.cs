@@ -1,10 +1,9 @@
-﻿
+
 namespace HotelManagementSystem.DTOs.Stays;
 
 // =====================================================
 // Developer: NhaNTCE181298
 // UC: UC-F07-02 - View Stays
-// OData: DTO phục vụ truy vấn danh sách lưu trú.
 // Mô tả: Trả thông tin Stay, phòng, khách đại diện
 // và trạng thái lưu trú.
 // =====================================================

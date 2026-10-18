@@ -1,4 +1,4 @@
-﻿
+
 using System.Data;
 using HotelManagementSystem.Data;
 using HotelManagementSystem.DTOs.ServiceUsages;
@@ -18,22 +18,16 @@ namespace HotelManagementSystem.Repositories.Implementations;
 //
 // Swagger: https://localhost:7024/swagger
 //
-// ODATA - LINK TEST TRỰC TIẾP:
 //
 // Danh sách:
-// https://localhost:7024/odata/ServiceUsageViews?$top=10
 //
 // Lọc theo Stay:
-// https://localhost:7024/odata/ServiceUsageViews?$filter=StayId%20eq%201
 //
 // Sắp xếp mới nhất:
-// https://localhost:7024/odata/ServiceUsageViews?$orderby=Id%20desc
 //
 // Phân trang:
-// https://localhost:7024/odata/ServiceUsageViews?$skip=0&$top=10&$count=true
 //
 // Chọn trường:
-// https://localhost:7024/odata/ServiceUsageViews?$select=Id,StayId,ServiceName,Amount
 // =====================================================
 
 public class ServiceUsageRepository : IServiceUsageRepository
@@ -102,13 +96,8 @@ public class ServiceUsageRepository : IServiceUsageRepository
     // Developer: NhaNTCE181298
     // UC-F09-02: View Service Usages
     //
-    // OData - COPY LINK TEST:
-    // https://localhost:7024/odata/ServiceUsageViews?$top=10
-    // https://localhost:7024/odata/ServiceUsageViews?$filter=StayId%20eq%201
-    // https://localhost:7024/odata/ServiceUsageViews?$orderby=Id%20desc
     //
     // Chỉ lấy bản ghi chưa bị xóa mềm.
-    // Không ToList() trước khi OData thực hiện truy vấn.
     // =================================================
     public IQueryable<ServiceUsageListDto> QueryUsageViews()
     {

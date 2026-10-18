@@ -1,4 +1,4 @@
-﻿
+
 using System.ComponentModel.DataAnnotations;
 
 namespace HotelManagementSystem.DTOs.ServiceUsages;
@@ -7,7 +7,6 @@ namespace HotelManagementSystem.DTOs.ServiceUsages;
 // Developer: NhaNTCE181298
 // UC: UC-F09-04 - Update Service Usage
 // Mô tả: Nhận số lượng và ghi chú cần cập nhật.
-// OData: Không dùng cho PUT.
 // =====================================================
 
 public class UpdateServiceUsageRequest

@@ -1,4 +1,4 @@
-﻿
+
 using HotelManagementSystem.Data;
 using HotelManagementSystem.DTOs.Reports;
 using HotelManagementSystem.Entities;
@@ -21,7 +21,6 @@ namespace HotelManagementSystem.Repositories.Implementations;
 // UC-F11-03: GET /api/reports/revenue
 // UC-F11-04: GET /api/reports/tasks
 //
-// Không sử dụng OData cho các báo cáo tổng hợp.
 // =====================================================
 
 public class ReportRepository : IReportRepository

@@ -8,26 +8,17 @@ namespace HotelManagementSystem.Controllers;
 
 // =====================================================
 // Developer: NhaNTCE181298
+// Module: F07 - Payment Management
 // UC-F07-05: Record Internal Payment
 //
-// SWAGGER: https://localhost:7024/swagger
-// Method: POST
-// Endpoint: /api/invoices/{invoiceId}/payments
+// Swagger: https://localhost:7024/swagger
+// POST /HotelOps/invoices/{invoiceId}/payments
 // Header: X-Demo-Account-Id
 // Body: RecordPaymentRequest
-//
-// 201: Thanh toán thành công.
-// 200: Gửi lại giao dịch đã tồn tại.
-// 400: Dữ liệu đầu vào không hợp lệ.
-// 403: Không có quyền thanh toán.
-// 404: Không tìm thấy Invoice.
-// 409: Xung đột hoặc vượt số tiền còn lại.
-//
-// OData: Không sử dụng.
 // =====================================================
 
 [ApiController]
-[Route("api/invoices/{invoiceId:int}/payments")]
+[Route("HotelOps/invoices/{invoiceId:int}/payments")]
 public class PaymentsController : ControllerBase
 {
     private readonly PaymentService _service;
@@ -41,6 +32,11 @@ public class PaymentsController : ControllerBase
         _environment = environment;
     }
 
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-05: Record Internal Payment
+    // POST /HotelOps/invoices/{invoiceId}/payments
+    // =================================================
     [HttpPost]
     [ProducesResponseType(typeof(PaymentResultDto), 201)]
     [ProducesResponseType(typeof(PaymentResultDto), 200)]
@@ -55,38 +51,50 @@ public class PaymentsController : ControllerBase
         int? accountId)
     {
         if (!_environment.IsDevelopment())
+        {
             return StatusCode(503, new
             {
                 message = "Đang chờ tích hợp JWT."
             });
+        }
 
-        if (!accountId.HasValue || accountId <= 0)
+        if (!accountId.HasValue || accountId.Value <= 0)
+        {
             return BadRequest(new
             {
                 message = "Thiếu X-Demo-Account-Id hợp lệ."
             });
+        }
 
         try
         {
             var result = await _service.RecordAsync(
-                invoiceId, request, accountId.Value);
+                invoiceId,
+                request,
+                accountId.Value);
 
+            // Giao dịch đã tồn tại: trả về kết quả cũ.
             if (result.Message ==
                 "Giao dịch đã được ghi nhận trước đó.")
+            {
                 return Ok(result);
+            }
 
+            // Giao dịch mới được ghi nhận.
             return StatusCode(201, result);
         }
         catch (InvoiceBusinessException ex)
         {
-            return StatusCode(ex.StatusCode,
-                new { message = ex.Message });
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
         }
         catch (DbUpdateConcurrencyException)
         {
             return Conflict(new
             {
-                message = "Dữ liệu đã thay đổi, thử lại."
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
             });
         }
         catch (DbUpdateException)

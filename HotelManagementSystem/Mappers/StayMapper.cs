@@ -1,4 +1,4 @@
-﻿
+
 using System.Linq.Expressions;
 using HotelManagementSystem.DTOs.Stays;
 using HotelManagementSystem.Entities;
@@ -15,10 +15,8 @@ namespace HotelManagementSystem.Mappers;
 // UC-F07-03: Stay -> StayDetailDto.
 // UC-F07-03: StayGuest -> StayGuestDetailDto.
 // UC-F07-03: ServiceUsage -> StayServiceUsageDetailDto.
-// UC-F07-07: Hỗ trợ truy vấn OData.
 //
 // Sử dụng Expression để EF Core dịch thành SQL.
-// Không ToList() trước khi lọc OData.
 // =====================================================
 
 public static class StayMapper
@@ -26,7 +24,6 @@ public static class StayMapper
     // =================================================
     // NhaNT | F07-02, F07-07
     // Expression để EF Core dịch truy vấn thành SQL.
-    // Không dùng ToList() trước khi lọc OData.
     // =================================================
     public static readonly Expression<Func<Stay, StayListDto>>
         ToListDto = s => new StayListDto

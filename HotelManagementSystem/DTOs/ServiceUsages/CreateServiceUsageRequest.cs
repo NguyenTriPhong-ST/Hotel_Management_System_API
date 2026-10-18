@@ -1,4 +1,4 @@
-﻿
+
 using System.ComponentModel.DataAnnotations;
 
 namespace HotelManagementSystem.DTOs.ServiceUsages;
@@ -7,7 +7,6 @@ namespace HotelManagementSystem.DTOs.ServiceUsages;
 // Developer: NhaNTCE181298
 // UC: UC-F09-01 - Create Service Usage
 // Mô tả: Kiểm tra dữ liệu ghi nhận dịch vụ.
-// OData: Không sử dụng cho POST.
 // =====================================================
 
 
@@ -55,7 +54,6 @@ namespace HotelManagementSystem.DTOs.ServiceUsages;
  *
  * NOTE:
  * - X-Demo-Account-Id=2: Receptionist test.
- * - OData không áp dụng cho thao tác POST.
  * - Thay header demo bằng JWT trước khi triển khai.
  * =====================================================
  */

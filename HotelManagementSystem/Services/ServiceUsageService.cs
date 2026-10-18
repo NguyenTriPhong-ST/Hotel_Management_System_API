@@ -1,4 +1,4 @@
-﻿
+
 using System.Text.Json;
 using HotelManagementSystem.DTOs.ServiceUsages;
 using HotelManagementSystem.Entities;
@@ -19,8 +19,6 @@ namespace HotelManagementSystem.Services;
 // PUT    /api/service-usages/{id}
 // DELETE /api/service-usages/{id}
 //
-// OData:
-// https://localhost:7024/odata/ServiceUsageViews?$top=10
 //
 // Service xử lý nghiệp vụ qua Repository.
 // =====================================================
@@ -246,11 +244,6 @@ public class ServiceUsageService
     // Developer: NhaNTCE181298
     // UC-F09-02: View Service Usages
     //
-    // ODATA - COPY LINK TEST:
-    // https://localhost:7024/odata/ServiceUsageViews?$top=10
-    // https://localhost:7024/odata/ServiceUsageViews?$filter=StayId%20eq%201
-    // https://localhost:7024/odata/ServiceUsageViews?$orderby=Id%20desc
-    // https://localhost:7024/odata/ServiceUsageViews?$skip=0&$top=10&$count=true
     // =================================================
     public IQueryable<ServiceUsageListDto> GetServiceUsages()
     {

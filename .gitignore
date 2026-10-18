@@ -482,3 +482,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Local development seed data
+/HotelManagementSystem/Data/Seed/DevelopmentDataSeeder.cs

@@ -1,10 +1,9 @@
-﻿
+
 namespace HotelManagementSystem.DTOs.ServiceUsages;
 
 // =====================================================
 // Developer: NhaNTCE181298
 // UC: UC-F09-02 - View Service Usages
-// OData: DTO dùng để lọc, sắp xếp và phân trang.
 // =====================================================
 
 public class ServiceUsageListDto

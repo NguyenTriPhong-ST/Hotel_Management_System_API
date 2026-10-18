@@ -1,4 +1,4 @@
-﻿
+
 using System.Text.Json;
 using HotelManagementSystem.DTOs.Invoices;
 using HotelManagementSystem.Entities;
@@ -23,7 +23,6 @@ namespace HotelManagementSystem.Services;
 //
 // Header: X-Demo-Account-Id (Development)
 // Body: Không có (stayId truyền qua route).
-// OData: Không sử dụng cho POST.
 //
 // Repository: IInvoiceRepository
 // Mapper: InvoiceMapper

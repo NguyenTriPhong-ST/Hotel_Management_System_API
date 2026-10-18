@@ -1,11 +1,10 @@
-﻿
+
 namespace HotelManagementSystem.DTOs.ServiceUsages;
 
 // =====================================================
 // Developer: NhaNTCE181298
 // UC: UC-F09-03 - View Service Usage Details
 // Mô tả: DTO trả thông tin chi tiết lượt sử dụng.
-// OData: Không sử dụng vì truy vấn theo ID.
 // =====================================================
 
 public class ServiceUsageDetailDto
