@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 
-namespace HotelManagementSystem.Features.RoomTypes;
+namespace HotelManagementSystem.DTOs.RoomTypes;
 
 public sealed class CreateRoomTypeRequest
 {

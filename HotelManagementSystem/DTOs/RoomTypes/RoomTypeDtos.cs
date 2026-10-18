@@ -1,4 +1,4 @@
-﻿namespace HotelManagementSystem.Features.RoomTypes;
+﻿namespace HotelManagementSystem.DTOs.RoomTypes;
 
 public sealed record RoomTypeDto(
     int Id,

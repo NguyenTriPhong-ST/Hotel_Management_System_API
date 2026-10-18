@@ -1,7 +1,9 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
+using HotelManagementSystem.DTOs.RoomTypes;
+using HotelManagementSystem.Services;
 
-namespace HotelManagementSystem.Features.RoomTypes;
+namespace HotelManagementSystem.Controllers;
 
 [ApiController]
 [Route("HotelOps/room-types")]

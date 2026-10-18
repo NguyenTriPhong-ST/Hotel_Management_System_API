@@ -1,39 +1,28 @@
 ﻿using System.Text.Json;
 using System.Text.RegularExpressions;
-using HotelManagementSystem.Data;
+using HotelManagementSystem.DTOs.RoomTypes;
 using HotelManagementSystem.Entities;
+using HotelManagementSystem.Mappers;
+using HotelManagementSystem.Repositories.Interfaces;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 
-namespace HotelManagementSystem.Features.RoomTypes;
-
-public enum RoomTypeErrorKind { Invalid, NotFound, Conflict }
-
-public sealed class RoomTypeException : Exception
-{
-    public RoomTypeErrorKind Kind { get; }
-
-    public RoomTypeException(RoomTypeErrorKind kind, string message) : base(message)
-        => Kind = kind;
-}
+namespace HotelManagementSystem.Services;
 
 public sealed class RoomTypeService
 {
-    private readonly AppDbContext _db;
+    private readonly IRoomTypeRepository _repository;
 
-    public RoomTypeService(AppDbContext db) => _db = db;
+    public RoomTypeService(IRoomTypeRepository repository) => _repository = repository;
 
-    /// <summary>
-    /// UC-F04-01 - Tạo loại phòng. Kiểm tra mã duy nhất, sức chứa và giá trước khi lưu.
-    /// </summary>
+    // UC-F04-01 - Create
     public async Task<RoomTypeDto> CreateAsync(CreateRoomTypeRequest request,
         int? actorId, string? actorName, string? correlationId)
     {
         var code = NormalizeCode(request.Code);
         var name = NormalizeName(request.Name);
         ValidateValues(request.Capacity, request.BasePricePerNight);
-
-        if (await _db.RoomTypes.AnyAsync(x => x.Code == code))
+        if (await _repository.CodeExistsAsync(code))
             throw new RoomTypeException(RoomTypeErrorKind.Conflict,
                 "Mã loại phòng đã tồn tại, kể cả trong dữ liệu lưu trữ.");
 
@@ -45,37 +34,28 @@ public sealed class RoomTypeService
             Capacity = request.Capacity,
             BasePricePerNight = request.BasePricePerNight
         };
-
-        // Tạo bản ghi và nhật ký trong cùng một transaction.
-        await using var transaction = await _db.Database.BeginTransactionAsync();
-        _db.RoomTypes.Add(entity);
         try
         {
-            await _db.SaveChangesAsync();
-            WriteAudit("Create", entity, actorId, actorName, correlationId,
-                oldValues: null, newValues: Snapshot(entity));
-            await _db.SaveChangesAsync();
-            await transaction.CommitAsync();
+            await _repository.InsertWithAuditAsync(entity,
+                saved => BuildAudit("Create", saved, actorId, actorName, correlationId,
+                    oldValues: null, newValues: RoomTypeMapper.ToAuditSnapshot(saved)));
         }
         catch (DbUpdateException ex) when (IsDuplicateKey(ex))
         {
             throw new RoomTypeException(RoomTypeErrorKind.Conflict, "Mã loại phòng đã tồn tại.");
         }
-
-        return Map(entity);
+        return RoomTypeMapper.ToDto(entity);
     }
 
-    /// <summary>
-    /// UC-F04-02 và UC-F04-06 - Phân trang, lọc và sắp xếp loại phòng chưa lưu trữ.
-    /// </summary>
+    // UC-F04-02 & UC-F04-06 - Get list/search/filter/sort
     public async Task<RoomTypePagedDto> GetListAsync(RoomTypeListQuery request)
     {
         if (request.MinPrice > request.MaxPrice)
             throw new RoomTypeException(RoomTypeErrorKind.Invalid,
                 "MinPrice không được lớn hơn MaxPrice.");
-
-        if (((long)request.Page - 1) * request.PageSize > int.MaxValue)
-            throw new RoomTypeException(RoomTypeErrorKind.Invalid, "Page quá lớn.");
+        if (request.Page <= 0 || request.PageSize is < 1 or > 100 ||
+            ((long)request.Page - 1) * request.PageSize > int.MaxValue)
+            throw new RoomTypeException(RoomTypeErrorKind.Invalid, "Page hoặc PageSize không hợp lệ.");
 
         var sortBy = (request.SortBy ?? "name").Trim().ToLowerInvariant();
         var direction = (request.SortDirection ?? "asc").Trim().ToLowerInvariant();
@@ -86,51 +66,24 @@ public sealed class RoomTypeService
             throw new RoomTypeException(RoomTypeErrorKind.Invalid,
                 "SortDirection chỉ nhận 'asc' hoặc 'desc'.");
 
-        IQueryable<RoomType> query = _db.RoomTypes.AsNoTracking()
-            .Where(x => x.DeletedAt == null);
-
-        if (!string.IsNullOrWhiteSpace(request.Name))
-        {
-            var keyword = request.Name.Trim();
-            query = query.Where(x => x.Name.Contains(keyword));
-        }
-        if (request.MinCapacity.HasValue)
-            query = query.Where(x => x.Capacity >= request.MinCapacity.Value);
-        if (request.MinPrice.HasValue)
-            query = query.Where(x => x.BasePricePerNight >= request.MinPrice.Value);
-        if (request.MaxPrice.HasValue)
-            query = query.Where(x => x.BasePricePerNight <= request.MaxPrice.Value);
-
-        var count = await query.CountAsync();
-        query = (sortBy, direction) switch
-        {
-            ("price", "asc") => query.OrderBy(x => x.BasePricePerNight).ThenBy(x => x.Id),
-            ("price", "desc") => query.OrderByDescending(x => x.BasePricePerNight).ThenBy(x => x.Id),
-            ("name", "desc") => query.OrderByDescending(x => x.Name).ThenBy(x => x.Id),
-            _ => query.OrderBy(x => x.Name).ThenBy(x => x.Id)
-        };
-
-        var entities = await query.Skip((request.Page - 1) * request.PageSize)
-            .Take(request.PageSize).ToListAsync();
-        return new RoomTypePagedDto(entities.Select(Map).ToList(),
+        var options = new RoomTypeSearchOptions(request.Name, request.MinCapacity,
+            request.MinPrice, request.MaxPrice,
+            request.Page, request.PageSize, sortBy, direction);
+        var (items, count) = await _repository.GetPagedAsync(options);
+        return new RoomTypePagedDto(items.Select(RoomTypeMapper.ToDto).ToList(),
             request.Page, request.PageSize, count);
     }
 
-    /// <summary>
-    /// UC-F04-03 - Xem chi tiết loại phòng chưa lưu trữ theo ID.
-    /// </summary>
+    // UC-F04-03 - Get by ID
     public async Task<RoomTypeDto> GetByIdAsync(int id)
     {
-        var entity = await _db.RoomTypes.AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Id == id && x.DeletedAt == null);
+        var entity = await _repository.FindActiveAsync(id);
         return entity is null
             ? throw new RoomTypeException(RoomTypeErrorKind.NotFound, "Không tìm thấy loại phòng.")
-            : Map(entity);
+            : RoomTypeMapper.ToDto(entity);
     }
 
-    /// <summary>
-    /// UC-F04-04 - Cập nhật loại phòng; RowVersion chống ghi đè dữ liệu mới hơn.
-    /// </summary>
+    // UC-F04-04 - Update
     public async Task<RoomTypeDto> UpdateAsync(int id, UpdateRoomTypeRequest request,
         int? actorId, string? actorName, string? correlationId)
     {
@@ -138,28 +91,25 @@ public sealed class RoomTypeService
         var name = NormalizeName(request.Name);
         ValidateValues(request.Capacity, request.BasePricePerNight);
         var version = ParseRowVersion(request.RowVersion);
-
-        var entity = await _db.RoomTypes.FirstOrDefaultAsync(x => x.Id == id && x.DeletedAt == null)
+        var entity = await _repository.FindActiveAsync(id, tracking: true)
             ?? throw new RoomTypeException(RoomTypeErrorKind.NotFound, "Không tìm thấy loại phòng.");
         if (!entity.RowVersion.SequenceEqual(version))
             throw new RoomTypeException(RoomTypeErrorKind.Conflict,
                 "RowVersion đã cũ. Hãy GET lại chi tiết loại phòng.");
-        if (await _db.RoomTypes.AnyAsync(x => x.Id != id && x.Code == code))
+        if (await _repository.CodeExistsAsync(code, excludingId: id))
             throw new RoomTypeException(RoomTypeErrorKind.Conflict, "Mã loại phòng đã tồn tại.");
 
-        var oldValues = Snapshot(entity);
-        _db.Entry(entity).Property(x => x.RowVersion).OriginalValue = version;
+        var oldValues = RoomTypeMapper.ToAuditSnapshot(entity);
         entity.Code = code;
         entity.Name = name;
         entity.Description = NormalizeDescription(request.Description);
         entity.Capacity = request.Capacity;
         entity.BasePricePerNight = request.BasePricePerNight;
-
-        WriteAudit("Update", entity, actorId, actorName, correlationId,
-            oldValues, Snapshot(entity));
+        var audit = BuildAudit("Update", entity, actorId, actorName, correlationId,
+            oldValues, RoomTypeMapper.ToAuditSnapshot(entity));
         try
         {
-            await _db.SaveChangesAsync();
+            await _repository.SaveWithAuditAsync(entity, version, audit);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -170,28 +120,26 @@ public sealed class RoomTypeService
         {
             throw new RoomTypeException(RoomTypeErrorKind.Conflict, "Mã loại phòng đã tồn tại.");
         }
-        return Map(entity);
+        return RoomTypeMapper.ToDto(entity);
     }
 
-    /// <summary>
-    /// UC-F04-05 - Lưu trữ mềm loại phòng khi không còn phòng đang hoạt động tham chiếu.
-    /// </summary>
+    // UC-F04-05 - Soft delete
     public async Task DeleteAsync(int id, int? actorId, string? actorName, string? correlationId)
     {
-        var entity = await _db.RoomTypes.FirstOrDefaultAsync(x => x.Id == id && x.DeletedAt == null)
+        var entity = await _repository.FindActiveAsync(id, tracking: true)
             ?? throw new RoomTypeException(RoomTypeErrorKind.NotFound, "Không tìm thấy loại phòng.");
-
-        if (await _db.Rooms.AnyAsync(x => x.RoomTypeId == id && x.DeletedAt == null))
+        if (await _repository.HasActiveRoomsAsync(id))
             throw new RoomTypeException(RoomTypeErrorKind.Conflict,
                 "Không thể lưu trữ loại phòng vì vẫn còn phòng đang sử dụng.");
 
-        var oldValues = Snapshot(entity);
+        var originalVersion = (byte[])entity.RowVersion.Clone();
+        var oldValues = RoomTypeMapper.ToAuditSnapshot(entity);
         entity.DeletedAt = DateTime.UtcNow;
-        WriteAudit("SoftDelete", entity, actorId, actorName, correlationId,
-            oldValues, Snapshot(entity));
+        var audit = BuildAudit("SoftDelete", entity, actorId, actorName, correlationId,
+            oldValues, RoomTypeMapper.ToAuditSnapshot(entity));
         try
         {
-            await _db.SaveChangesAsync();
+            await _repository.SaveWithAuditAsync(entity, originalVersion, audit);
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -243,27 +191,10 @@ public sealed class RoomTypeService
     private static bool IsDuplicateKey(DbUpdateException ex)
         => ex.InnerException is SqlException sql && sql.Number is 2601 or 2627;
 
-    private static RoomTypeDto Map(RoomType x) => new(
-        x.Id, x.Code, x.Name, x.Description, x.Capacity,
-        x.BasePricePerNight, x.CreatedAt, x.UpdatedAt,
-        Convert.ToBase64String(x.RowVersion));
-
-    private static object Snapshot(RoomType x) => new
-    {
-        x.Id,
-        x.Code,
-        x.Name,
-        x.Description,
-        x.Capacity,
-        x.BasePricePerNight,
-        x.DeletedAt
-    };
-
-    private void WriteAudit(string action, RoomType entity,
+    private static AuditLog BuildAudit(string action, RoomType entity,
         int? actorId, string? actorName, string? correlationId,
         object? oldValues, object? newValues)
-    {
-        _db.AuditLogs.Add(new AuditLog
+        => new()
         {
             ActorAccountId = actorId,
             ActorUsernameSnapshot = actorName?.Length > 50 ? actorName[..50] : actorName,
@@ -276,6 +207,5 @@ public sealed class RoomTypeService
             OldValuesJson = oldValues is null ? null : JsonSerializer.Serialize(oldValues),
             NewValuesJson = newValues is null ? null : JsonSerializer.Serialize(newValues),
             CorrelationId = correlationId
-        });
-    }
+        };
 }

@@ -1,8 +1,9 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using System.Runtime.InteropServices;
-using System.Security.Claims;
+﻿using System.Security.Claims;
+using Microsoft.AspNetCore.Mvc;
+using HotelManagementSystem.DTOs.Rooms;
+using HotelManagementSystem.Services;
 
-namespace HotelManagementSystem.Features.Rooms;
+namespace HotelManagementSystem.Controllers;
 
 [ApiController]
 [Route("HotelOps/rooms")]
@@ -19,6 +20,9 @@ public sealed class RoomsController : ControllerBase
     /// POST https://localhost:7024/HotelOps/rooms
     /// </summary>
     [HttpPost]
+    [ProducesResponseType(typeof(RoomDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public Task<IActionResult> Create([FromBody] CreateRoomRequest request)
         => ExecuteAsync(async () =>
         {
@@ -31,6 +35,8 @@ public sealed class RoomsController : ControllerBase
     /// GET https://localhost:7024/HotelOps/rooms
     /// </summary>
     [HttpGet]
+    [ProducesResponseType(typeof(RoomPagedDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public Task<IActionResult> GetList([FromQuery] RoomListQuery query)
         => ExecuteAsync(async () => Ok(await _service.GetListAsync(query)));
 
@@ -39,6 +45,8 @@ public sealed class RoomsController : ControllerBase
     /// GET https://localhost:7024/HotelOps/rooms/{id}
     /// </summary>
     [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(RoomDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public Task<IActionResult> GetById(int id)
         => ExecuteAsync(async () => Ok(await _service.GetByIdAsync(id)));
 
@@ -47,6 +55,10 @@ public sealed class RoomsController : ControllerBase
     /// PUT https://localhost:7024/HotelOps/rooms/{id}
     /// </summary>
     [HttpPut("{id:int}")]
+    [ProducesResponseType(typeof(RoomDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public Task<IActionResult> Update(int id, [FromBody] UpdateRoomRequest request)
         => ExecuteAsync(async () => Ok(await _service.UpdateAsync(
             id, request, ActorId(), ActorName(), HttpContext.TraceIdentifier)));
@@ -56,6 +68,10 @@ public sealed class RoomsController : ControllerBase
     /// PATCH https://localhost:7024/HotelOps/rooms/{id}/status
     /// </summary>
     [HttpPatch("{id:int}/status")]
+    [ProducesResponseType(typeof(RoomDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateRoomStatusRequest request)
         => ExecuteAsync(async () => Ok(await _service.UpdateStatusAsync(
             id, request, ActorId(), ActorName(), HttpContext.TraceIdentifier)));
@@ -65,6 +81,9 @@ public sealed class RoomsController : ControllerBase
     /// DELETE https://localhost:7024/HotelOps/rooms/{id}
     /// </summary>
     [HttpDelete("{id:int}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public Task<IActionResult> Delete(int id)
         => ExecuteAsync(async () =>
         {
