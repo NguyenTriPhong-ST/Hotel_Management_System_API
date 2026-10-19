@@ -4,6 +4,7 @@ using HotelManagementSystem.DTOs.Stays;
 using HotelManagementSystem.Entities;
 using HotelManagementSystem.Entities.Enums;
 using HotelManagementSystem.Repositories.Interfaces;
+using HotelManagementSystem.Services.Interfaces;
 
 namespace HotelManagementSystem.Services;
 
@@ -27,7 +28,7 @@ namespace HotelManagementSystem.Services;
 // Xử lý nghiệp vụ qua IStayRepository.
 // =====================================================
 
-public class StayService
+public class StayService : IStayService
 {
     private readonly IStayRepository _repository;
 

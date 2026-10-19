@@ -1,0 +1,1288 @@
+﻿==================================================
+FILE: Services\ServiceUsageService.cs
+==================================================
+
+using System.Text.Json;
+using HotelManagementSystem.DTOs.ServiceUsages;
+using HotelManagementSystem.Entities;
+using HotelManagementSystem.Entities.Enums;
+using HotelManagementSystem.Mappers;
+using HotelManagementSystem.Repositories.Interfaces;
+
+namespace HotelManagementSystem.Services;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F09 - Service Usage Management
+// Layer: Service
+//
+// Swagger: https://localhost:7024/swagger
+// POST   /api/service-usages
+// GET    /api/service-usages/{id}
+// PUT    /api/service-usages/{id}
+// DELETE /api/service-usages/{id}
+//
+//
+// Service xử lý nghiệp vụ qua Repository.
+// =====================================================
+
+public class ServiceUsageService
+{
+    private readonly IServiceUsageRepository _repository;
+
+    public ServiceUsageService(
+        IServiceUsageRepository repository)
+    {
+        _repository = repository;
+    }
+
+    // NhaNT | UC-F09-01, 04, 05
+    // Chỉ Receptionist đang hoạt động được thao tác.
+    private async Task<Account> CheckReceptionistAsync(
+        int accountId)
+    {
+        var account =
+            await _repository.GetAccountAsync(accountId);
+
+        if (account == null || !account.IsActive)
+        {
+            throw new ServiceUsageBusinessException(
+                403,
+                "Tài khoản không hợp lệ hoặc đã bị khóa.");
+        }
+
+        if (account.Role != AccountRole.Receptionist)
+        {
+            throw new ServiceUsageBusinessException(
+                403,
+                "Tài khoản không có quyền quản lý dịch vụ.");
+        }
+
+        return account;
+    }
+
+    // NhaNT | UC-F09-04, UC-F09-05
+    // Kiểm tra lượt sử dụng chưa xóa và Stay chưa check-out.
+    private async Task<ServiceUsage> GetEditableUsageAsync(
+        int id)
+    {
+        var usage =
+            await _repository.GetEditableUsageAsync(id);
+
+        if (usage == null || usage.DeletedAt != null)
+        {
+            throw new ServiceUsageBusinessException(
+                404,
+                "Không tìm thấy lượt sử dụng dịch vụ.");
+        }
+
+        if (usage.Stay.CheckedOutAt != null)
+        {
+            throw new ServiceUsageBusinessException(
+                409,
+                "Stay đã check-out, không thể chỉnh sửa dịch vụ.");
+        }
+
+        return usage;
+    }
+
+    // NhaNT | UC-F09-04, UC-F09-05
+    // Invoice Finalized không được sửa chi phí dịch vụ.
+    private async Task<Invoice?> GetEditableInvoiceAsync(
+        int stayId)
+    {
+        var invoice =
+            await _repository.GetInvoiceAsync(stayId);
+
+        if (invoice != null &&
+            invoice.Status == InvoiceStatus.Finalized)
+        {
+            throw new ServiceUsageBusinessException(
+                409,
+                "Hóa đơn đã chốt, không thể chỉnh sửa dịch vụ.");
+        }
+
+        return invoice;
+    }
+
+    // NhaNT | UC-F09-04, UC-F09-05
+    // Tính lại tổng hóa đơn sau khi SQL tính InvoiceLine.Amount.
+    private async Task RecalculateDraftInvoiceAsync(
+        Invoice invoice)
+    {
+        invoice.TotalAmount =
+            await _repository.GetInvoiceTotalAsync(invoice.Id);
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-01: Create Service Usage
+    //
+    // Swagger: https://localhost:7024/swagger
+    // Method: POST
+    // Endpoint: /api/service-usages
+    // Header: X-Demo-Account-Id
+    // Body: CreateServiceUsageRequest
+    //
+    // Kết quả: 201 - Ghi nhận dịch vụ thành công.
+    // =================================================
+    public async Task<CreateServiceUsageResponse> CreateAsync(
+        CreateServiceUsageRequest request,
+        int accountId)
+    {
+        var now = DateTime.UtcNow;
+
+        await using var transaction =
+            await _repository.BeginTransactionAsync();
+
+        // NhaNT | F09-01 - Kiểm tra Receptionist.
+        var account =
+            await _repository.GetAccountAsync(accountId);
+
+        if (account == null || !account.IsActive)
+        {
+            throw new ServiceUsageBusinessException(
+                403,
+                "Tài khoản không hợp lệ hoặc đã bị khóa.");
+        }
+
+        if (account.Role != AccountRole.Receptionist)
+        {
+            throw new ServiceUsageBusinessException(
+                403,
+                "Tài khoản không có quyền ghi nhận dịch vụ.");
+        }
+
+        // NhaNT | F09-01 - Kiểm tra Stay còn hoạt động.
+        var stay = await _repository.GetStayAsync(
+            request.StayId);
+
+        if (stay == null)
+        {
+            throw new ServiceUsageBusinessException(
+                404, "Không tìm thấy Stay.");
+        }
+
+        if (stay.CheckedOutAt != null)
+        {
+            throw new ServiceUsageBusinessException(
+                409,
+                "Stay đã check-out, không thể thêm dịch vụ.");
+        }
+
+        // NhaNT | F09-01 - Không thêm sau khi chốt hóa đơn.
+        if (await _repository.HasFinalizedInvoiceAsync(
+                request.StayId))
+        {
+            throw new ServiceUsageBusinessException(
+                409,
+                "Hóa đơn đã chốt, không thể thêm dịch vụ.");
+        }
+
+        // NhaNT | F09-01 - Kiểm tra dịch vụ đang hoạt động.
+        var hotelService =
+            await _repository.GetHotelServiceAsync(
+                request.HotelServiceId);
+
+        if (hotelService == null)
+        {
+            throw new ServiceUsageBusinessException(
+                404, "Không tìm thấy dịch vụ.");
+        }
+
+        if (!hotelService.IsActive)
+        {
+            throw new ServiceUsageBusinessException(
+                409,
+                "Dịch vụ hiện không hoạt động.");
+        }
+
+        if (request.Quantity <= 0)
+        {
+            throw new ServiceUsageBusinessException(
+                400,
+                "Số lượng sử dụng phải lớn hơn 0.");
+        }
+
+        // NhaNT | F09-01 - Snapshot tên, đơn vị và giá.
+        var usage = new ServiceUsage
+        {
+            StayId = stay.Id,
+            HotelServiceId = hotelService.Id,
+            ServiceNameSnapshot = hotelService.Name,
+            UnitSnapshot = hotelService.Unit,
+            UnitPrice = hotelService.CurrentPrice,
+            Quantity = request.Quantity,
+            UsedAt = now,
+            RecordedByAccountId = account.Id,
+            Notes = request.Notes?.Trim()
+        };
+
+        _repository.AddUsage(usage);
+        await _repository.SaveChangesAsync();
+
+        // NhaNT | F09-01 - AuditLog trong transaction.
+        _repository.AddAuditLog(new AuditLog
+        {
+            ActorAccountId = account.Id,
+            ActorUsernameSnapshot = account.Username,
+            Action = "CreateServiceUsage",
+            EntityType = "ServiceUsage",
+            EntityId = usage.Id.ToString(),
+            OccurredAt = now,
+            Summary =
+                $"Ghi nhận {usage.Quantity} {usage.UnitSnapshot} " +
+                $"{usage.ServiceNameSnapshot} cho Stay {stay.StayCode}."
+        });
+
+        await _repository.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return ServiceUsageMapper.ToResponse(
+            usage,
+            "Ghi nhận dịch vụ thành công.");
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-02: View Service Usages
+    //
+    // =================================================
+    public IQueryable<ServiceUsageListDto> GetServiceUsages()
+    {
+        return _repository.QueryUsageViews();
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-03: View Service Usage Details
+    //
+    // Swagger: https://localhost:7024/swagger
+    // Method: GET
+    // Endpoint: /api/service-usages/{id}
+    // Input: id = ServiceUsage ID.
+    // =================================================
+    public Task<ServiceUsageDetailDto?> GetDetailAsync(int id)
+    {
+        return _repository.GetDetailAsync(id);
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-04: Update Service Usage
+    //
+    // Swagger: https://localhost:7024/swagger
+    // Method: PUT
+    // Endpoint: /api/service-usages/{id}
+    // Header: X-Demo-Account-Id
+    // Body: UpdateServiceUsageRequest
+    //
+    // Chỉ cập nhật Quantity và Notes.
+    // =================================================
+    public async Task<CreateServiceUsageResponse> UpdateAsync(
+        int id,
+        UpdateServiceUsageRequest request,
+        int accountId)
+    {
+        await using var transaction =
+            await _repository.BeginTransactionAsync();
+
+        var account =
+            await CheckReceptionistAsync(accountId);
+
+        var usage =
+            await GetEditableUsageAsync(id);
+
+        var invoice =
+            await GetEditableInvoiceAsync(usage.StayId);
+
+        if (request.Quantity <= 0)
+        {
+            throw new ServiceUsageBusinessException(
+                400, "Quantity phải lớn hơn 0.");
+        }
+
+        var oldQuantity = usage.Quantity;
+        var oldNotes = usage.Notes;
+
+        // NhaNT | F09-04 - Không thay đổi giá snapshot.
+        usage.Quantity = request.Quantity;
+        usage.Notes = request.Notes?.Trim();
+
+        if (invoice != null)
+        {
+            var line =
+                await _repository.GetInvoiceLineAsync(
+                    invoice.Id,
+                    usage.Id);
+
+            if (line == null)
+            {
+                // NhaNT | F09-04
+                // Bổ sung dòng dịch vụ thiếu trong Draft.
+                line = new InvoiceLine
+                {
+                    InvoiceId = invoice.Id,
+                    ServiceUsageId = usage.Id,
+                    LineType = InvoiceLineType.ServiceCharge,
+                    Description = usage.ServiceNameSnapshot,
+                    Unit = usage.UnitSnapshot,
+                    Quantity = usage.Quantity,
+                    UnitPrice = usage.UnitPrice
+                };
+
+                _repository.AddInvoiceLine(line);
+            }
+            else
+            {
+                // NhaNT | F09-04
+                // Đồng bộ số lượng và thông tin snapshot.
+                line.Quantity = usage.Quantity;
+                line.UnitPrice = usage.UnitPrice;
+                line.Description = usage.ServiceNameSnapshot;
+                line.Unit = usage.UnitSnapshot;
+            }
+        }
+
+        // NhaNT | F09-04
+        // Lưu trước để SQL Server cập nhật Amount.
+        await _repository.SaveChangesAsync();
+
+        if (invoice != null)
+        {
+            await RecalculateDraftInvoiceAsync(invoice);
+        }
+
+        // NhaNT | F09-04 - Lưu AuditLog.
+        _repository.AddAuditLog(new AuditLog
+        {
+            ActorAccountId = account.Id,
+            ActorUsernameSnapshot = account.Username,
+            Action = "UpdateServiceUsage",
+            EntityType = "ServiceUsage",
+            EntityId = usage.Id.ToString(),
+            OccurredAt = DateTime.UtcNow,
+            Summary = $"Cập nhật dịch vụ ID {usage.Id}.",
+            OldValuesJson = JsonSerializer.Serialize(new
+            {
+                Quantity = oldQuantity,
+                Notes = oldNotes
+            }),
+            NewValuesJson = JsonSerializer.Serialize(new
+            {
+                Quantity = usage.Quantity,
+                Notes = usage.Notes
+            })
+        });
+
+        await _repository.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return ServiceUsageMapper.ToResponse(
+            usage,
+            "Cập nhật lượt sử dụng dịch vụ thành công.");
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-05: Soft Delete Service Usage
+    //
+    // Swagger: https://localhost:7024/swagger
+    // Method: DELETE
+    // Endpoint: /api/service-usages/{id}
+    // Header: X-Demo-Account-Id
+    //
+    // Xóa mềm ServiceUsage và xóa phí khỏi Invoice Draft.
+    // =================================================
+    public async Task DeleteAsync(int id, int accountId)
+    {
+        await using var transaction =
+            await _repository.BeginTransactionAsync();
+
+        var account =
+            await CheckReceptionistAsync(accountId);
+
+        var usage =
+            await GetEditableUsageAsync(id);
+
+        var invoice =
+            await GetEditableInvoiceAsync(usage.StayId);
+
+        // NhaNT | F09-05 - Xóa dòng phí trong Draft.
+        if (invoice != null)
+        {
+            var line =
+                await _repository.GetInvoiceLineAsync(
+                    invoice.Id,
+                    usage.Id);
+
+            if (line != null)
+            {
+                _repository.RemoveInvoiceLine(line);
+            }
+        }
+
+        // NhaNT | F09-05
+        // Soft delete, giữ ServiceUsage trong Database.
+        usage.DeletedAt = DateTime.UtcNow;
+
+        await _repository.SaveChangesAsync();
+
+        if (invoice != null)
+        {
+            await RecalculateDraftInvoiceAsync(invoice);
+        }
+
+        // NhaNT | F09-05 - Ghi AuditLog.
+        _repository.AddAuditLog(new AuditLog
+        {
+            ActorAccountId = account.Id,
+            ActorUsernameSnapshot = account.Username,
+            Action = "DeleteServiceUsage",
+            EntityType = "ServiceUsage",
+            EntityId = usage.Id.ToString(),
+            OccurredAt = DateTime.UtcNow,
+            Summary =
+                $"Xóa mềm dịch vụ ID {usage.Id} " +
+                $"của Stay ID {usage.StayId}.",
+            OldValuesJson = JsonSerializer.Serialize(new
+            {
+                usage.Quantity,
+                usage.UnitPrice,
+                usage.Notes
+            }),
+            NewValuesJson = JsonSerializer.Serialize(new
+            {
+                usage.DeletedAt
+            })
+        });
+
+        await _repository.SaveChangesAsync();
+        await transaction.CommitAsync();
+    }
+}
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC-F09-01 đến UC-F09-05
+// Exception trả lỗi nghiệp vụ qua Controller.
+// =====================================================
+public class ServiceUsageBusinessException : Exception
+{
+    public int StatusCode { get; }
+
+    public ServiceUsageBusinessException(
+        int statusCode,
+        string message) : base(message)
+    {
+        StatusCode = statusCode;
+    }
+}
+
+==================================================
+FILE: Controllers\ServiceUsagesController.cs
+==================================================
+
+using HotelManagementSystem.DTOs.ServiceUsages;
+using HotelManagementSystem.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace HotelManagementSystem.Controllers;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F09 - Service Usage Management
+// Swagger: https://localhost:7024/swagger
+//
+// UC-F09-01: POST   /HotelOps/service-usages
+// UC-F09-02: GET    /HotelOps/service-usages
+// UC-F09-03: GET    /HotelOps/service-usages/{id}
+// UC-F09-04: PUT    /HotelOps/service-usages/{id}
+// UC-F09-05: DELETE /HotelOps/service-usages/{id}
+//
+// Header ghi dữ liệu: X-Demo-Account-Id
+// =====================================================
+
+[ApiController]
+[Route("HotelOps/service-usages")]
+public class ServiceUsagesController : ControllerBase
+{
+    private readonly ServiceUsageService _service;
+    private readonly IWebHostEnvironment _environment;
+
+    public ServiceUsagesController(
+        ServiceUsageService service,
+        IWebHostEnvironment environment)
+    {
+        _service = service;
+        _environment = environment;
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-01: Create Service Usage
+    // POST /HotelOps/service-usages
+    // Body: CreateServiceUsageRequest
+    // Header: X-Demo-Account-Id
+    // =================================================
+    [HttpPost]
+    [ProducesResponseType(typeof(CreateServiceUsageResponse), 201)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<IActionResult> Create(
+        [FromBody] CreateServiceUsageRequest request,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? demoAccountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "API đang chờ tích hợp JWT."
+            });
+        }
+
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        try
+        {
+            var result = await _service.CreateAsync(
+                request,
+                demoAccountId.Value);
+
+            return StatusCode(201, result);
+        }
+        catch (ServiceUsageBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new
+            {
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
+            });
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new
+            {
+                message = "Xung đột dữ liệu khi ghi nhận dịch vụ."
+            });
+        }
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-02: View Service Usages
+    // GET /HotelOps/service-usages
+    //
+    // Query: search, stayId, hotelServiceId,
+    //        page, pageSize, sort
+    //
+    // GET /HotelOps/service-usages?page=1&pageSize=20
+    // GET /HotelOps/service-usages?stayId=20
+    // GET /HotelOps/service-usages?hotelServiceId=1
+    // GET /HotelOps/service-usages?search=P101
+    // GET /HotelOps/service-usages?sort=oldest
+    // =================================================
+    [HttpGet]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(400)]
+    public async Task<IActionResult> GetServiceUsages(
+        [FromQuery] string? search,
+        [FromQuery] int? stayId,
+        [FromQuery] int? hotelServiceId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string sort = "newest")
+    {
+        if (page < 1)
+        {
+            return BadRequest(new
+            {
+                message = "page phải lớn hơn hoặc bằng 1."
+            });
+        }
+
+        if (pageSize < 1 || pageSize > 100)
+        {
+            return BadRequest(new
+            {
+                message = "pageSize phải từ 1 đến 100."
+            });
+        }
+
+        if (stayId.HasValue && stayId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "stayId phải lớn hơn 0."
+            });
+        }
+
+        if (hotelServiceId.HasValue &&
+            hotelServiceId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "hotelServiceId phải lớn hơn 0."
+            });
+        }
+
+        var offset = ((long)page - 1) * pageSize;
+
+        if (offset > int.MaxValue)
+        {
+            return BadRequest(new
+            {
+                message = "page vượt giới hạn phân trang."
+            });
+        }
+
+        var normalizedSort = (sort ?? "newest")
+            .Trim()
+            .ToLowerInvariant();
+
+        if (normalizedSort != "newest" &&
+            normalizedSort != "oldest")
+        {
+            return BadRequest(new
+            {
+                message = "sort chỉ nhận newest hoặc oldest."
+            });
+        }
+
+        var query = _service.GetServiceUsages();
+
+        // NhaNT | F09-02
+        // Lọc lượt sử dụng theo Stay.
+        if (stayId.HasValue)
+        {
+            query = query.Where(x =>
+                x.StayId == stayId.Value);
+        }
+
+        // NhaNT | F09-02
+        // Lọc theo dịch vụ khách sạn.
+        if (hotelServiceId.HasValue)
+        {
+            query = query.Where(x =>
+                x.HotelServiceId == hotelServiceId.Value);
+        }
+
+        // NhaNT | F09-02
+        // Tìm theo mã Stay, phòng và tên dịch vụ.
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim();
+
+            query = query.Where(x =>
+                x.StayCode.Contains(keyword) ||
+                x.RoomCode.Contains(keyword) ||
+                x.ServiceName.Contains(keyword));
+        }
+
+        // NhaNT | F09-02
+        // Sắp xếp và phân trang tại Database.
+        query = normalizedSort == "oldest"
+            ? query.OrderBy(x => x.Id)
+            : query.OrderByDescending(x => x.Id);
+
+        var totalItems = await query.CountAsync();
+
+        var items = await query
+            .Skip((int)offset)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return Ok(new
+        {
+            items,
+            totalItems,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling(
+                totalItems / (double)pageSize)
+        });
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-03: View Service Usage Details
+    // GET /HotelOps/service-usages/{id}
+    // =================================================
+    [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(ServiceUsageDetailDto), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> GetDetail(int id)
+    {
+        if (id <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "ServiceUsage ID phải lớn hơn 0."
+            });
+        }
+
+        var result = await _service.GetDetailAsync(id);
+
+        if (result == null)
+        {
+            return NotFound(new
+            {
+                message = "Không tìm thấy lượt sử dụng dịch vụ."
+            });
+        }
+
+        return Ok(result);
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-04: Update Service Usage
+    // PUT /HotelOps/service-usages/{id}
+    // Body: UpdateServiceUsageRequest
+    // Header: X-Demo-Account-Id
+    // =================================================
+    [HttpPut("{id:int}")]
+    [ProducesResponseType(typeof(CreateServiceUsageResponse), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<IActionResult> Update(
+        int id,
+        [FromBody] UpdateServiceUsageRequest request,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? demoAccountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "API đang chờ tích hợp JWT."
+            });
+        }
+
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        if (id <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "ServiceUsage ID phải lớn hơn 0."
+            });
+        }
+
+        try
+        {
+            var result = await _service.UpdateAsync(
+                id,
+                request,
+                demoAccountId.Value);
+
+            return Ok(result);
+        }
+        catch (ServiceUsageBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new
+            {
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
+            });
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new
+            {
+                message = "Xung đột dữ liệu khi cập nhật dịch vụ."
+            });
+        }
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F09-05: Delete Service Usage
+    // DELETE /HotelOps/service-usages/{id}
+    // Header: X-Demo-Account-Id
+    // Xóa mềm, không xóa vật lý dữ liệu.
+    // =================================================
+    [HttpDelete("{id:int}")]
+    [ProducesResponseType(204)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? demoAccountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "API đang chờ tích hợp JWT."
+            });
+        }
+
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        if (id <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "ServiceUsage ID phải lớn hơn 0."
+            });
+        }
+
+        try
+        {
+            await _service.DeleteAsync(
+                id,
+                demoAccountId.Value);
+
+            return NoContent();
+        }
+        catch (ServiceUsageBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new
+            {
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
+            });
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new
+            {
+                message = "Xung đột dữ liệu khi xóa dịch vụ."
+            });
+        }
+    }
+}
+
+==================================================
+FILE: Repositories\Interfaces\IServiceUsageRepository.cs
+==================================================
+
+using HotelManagementSystem.DTOs.ServiceUsages;
+using HotelManagementSystem.Entities;
+using Microsoft.EntityFrameworkCore.Storage;
+
+namespace HotelManagementSystem.Repositories.Interfaces;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F09 - Service Usage Management
+// Layer: Repository Interface
+//
+// Swagger: https://localhost:7024/swagger
+// =====================================================
+
+public interface IServiceUsageRepository
+{
+    // NhaNT | F09-01, 04, 05 - Transaction.
+    Task<IDbContextTransaction> BeginTransactionAsync();
+
+    // NhaNT | F09-01, 04, 05 - Kiểm tra nhân viên.
+    Task<Account?> GetAccountAsync(int accountId);
+
+    // NhaNT | F09-01 - Kiểm tra Stay.
+    Task<Stay?> GetStayAsync(int stayId);
+
+    // NhaNT | F09-01 - Kiểm tra Invoice Finalized.
+    Task<bool> HasFinalizedInvoiceAsync(int stayId);
+
+    // NhaNT | F09-01 - Lấy dịch vụ khách sạn.
+    Task<HotelService?> GetHotelServiceAsync(int serviceId);
+
+    // NhaNT | F09-01 - Thêm lượt sử dụng.
+    void AddUsage(ServiceUsage usage);
+
+    IQueryable<ServiceUsageListDto> QueryUsageViews();
+
+    // NhaNT | F09-03 - Chi tiết lượt sử dụng.
+    Task<ServiceUsageDetailDto?> GetDetailAsync(int id);
+
+    // NhaNT | F09-04, 05 - Lấy bản ghi để sửa/xóa.
+    Task<ServiceUsage?> GetEditableUsageAsync(int id);
+
+    // NhaNT | F09-04, 05 - Hóa đơn đang theo dõi.
+    Task<Invoice?> GetInvoiceAsync(int stayId);
+
+    // NhaNT | F09-04, 05 - Dòng phí dịch vụ.
+    Task<InvoiceLine?> GetInvoiceLineAsync(
+        int invoiceId, int usageId);
+
+    // NhaNT | F09-04 - Tạo dòng phí còn thiếu.
+    void AddInvoiceLine(InvoiceLine line);
+
+    // NhaNT | F09-05 - Xóa dòng phí khi soft delete.
+    void RemoveInvoiceLine(InvoiceLine line);
+
+    // NhaNT | F09-04, 05 - Tổng tiền Invoice Draft.
+    Task<decimal> GetInvoiceTotalAsync(int invoiceId);
+
+    // NhaNT | F09-01, 04, 05 - Ghi AuditLog.
+    void AddAuditLog(AuditLog log);
+
+    // NhaNT | F09-01, 04, 05 - Lưu EF Core.
+    Task<int> SaveChangesAsync();
+}
+
+==================================================
+FILE: DTOs\ServiceUsages\CreateServiceUsageRequest.cs
+==================================================
+
+using System.ComponentModel.DataAnnotations;
+
+namespace HotelManagementSystem.DTOs.ServiceUsages;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC: UC-F09-01 - Create Service Usage
+// Mô tả: Kiểm tra dữ liệu ghi nhận dịch vụ.
+// =====================================================
+
+
+/*
+ * =====================================================
+ * Developer: NhaNTCE181298
+ * UC: UC-F09-01 - Create Service Usage
+ * Endpoint: POST /api/service-usages
+ * Swagger: https://localhost:7024/swagger
+ * 
+ * 
+ * Request body
+{
+  "stayId": 16,
+  "hotelServiceId": 1,
+  "quantity": 2,
+  "notes": "Test UC-F09-01 - Invoice da Finalized."
+}
+
+ *
+ * TEST CASES:
+ * 1. Valid: StayId=20, ServiceId=1, Qty=2
+ *    -> 201 Created, Amount=180000.
+ *
+ * 2. Unauthorized Role: AccountId=1
+ *    -> 403 Forbidden.
+ *
+ * 3. Stay Not Found: StayId=99999
+ *    -> 404 Not Found.
+ *
+ * 4. Inactive Service: ServiceId=9
+ *    -> 409 Conflict.
+ *
+ * 5. Checked-out Stay: StayId=1
+ *    -> 409 Conflict.
+ *
+ * 6. Invalid Quantity: Quantity=0
+ *    -> 400 Bad Request.
+ *
+ * 7. Finalized Invoice: StayId=16
+ *    -> 409 Conflict.
+ *
+ * 8. SQL Verification:
+ *    -> ServiceUsage ID 58, AuditLog ID 55.
+ *
+ * NOTE:
+ * - X-Demo-Account-Id=2: Receptionist test.
+ * - Thay header demo bằng JWT trước khi triển khai.
+ * =====================================================
+ */
+
+
+public class CreateServiceUsageRequest
+{
+    [Range(1, int.MaxValue,
+        ErrorMessage = "StayId phải lớn hơn 0.")]
+    public int StayId { get; set; }
+
+    [Range(1, int.MaxValue,
+        ErrorMessage = "HotelServiceId phải lớn hơn 0.")]
+    public int HotelServiceId { get; set; }
+
+    // NhaNTCE181298 | UC-F09-01
+    // Parse giới hạn decimal bằng InvariantCulture,
+    // tránh lỗi khi máy sử dụng dấu phẩy thập phân.
+    [Range(
+        typeof(decimal),
+        "0.01",
+        "99999999.99",
+        ParseLimitsInInvariantCulture = true,
+        ErrorMessage = "Quantity phải lớn hơn 0 và không vượt quá giới hạn."
+    )]
+    public decimal Quantity { get; set; }
+
+    [MaxLength(1000,
+        ErrorMessage = "Ghi chú không vượt quá 1000 ký tự.")]
+    public string? Notes { get; set; }
+}
+
+==================================================
+FILE: DTOs\ServiceUsages\CreateServiceUsageResponse.cs
+==================================================
+
+namespace HotelManagementSystem.DTOs.ServiceUsages;
+
+// Developer: NhaNTCE181298
+// UC-F09-01: Kết quả ghi nhận sử dụng dịch vụ.
+
+public class CreateServiceUsageResponse
+{
+    public int Id { get; set; }
+    public int StayId { get; set; }
+    public int HotelServiceId { get; set; }
+
+    public string ServiceName { get; set; } = string.Empty;
+    public string Unit { get; set; } = string.Empty;
+
+    public decimal Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal Amount { get; set; }
+
+    public DateTime UsedAt { get; set; }
+    public int RecordedByAccountId { get; set; }
+    public string? Notes { get; set; }
+
+    public string Message { get; set; } = string.Empty;
+}
+
+==================================================
+FILE: DTOs\ServiceUsages\UpdateServiceUsageRequest.cs
+==================================================
+
+using System.ComponentModel.DataAnnotations;
+
+namespace HotelManagementSystem.DTOs.ServiceUsages;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC: UC-F09-04 - Update Service Usage
+// Mô tả: Nhận số lượng và ghi chú cần cập nhật.
+// =====================================================
+
+public class UpdateServiceUsageRequest
+{
+    [Range(
+        typeof(decimal),
+        "0.01",
+        "99999999.99",
+        ParseLimitsInInvariantCulture = true,
+        ErrorMessage = "Quantity phải lớn hơn 0 và không vượt quá giới hạn."
+    )]
+    public decimal Quantity { get; set; }
+
+    [MaxLength(1000)]
+    public string? Notes { get; set; }
+}
+
+==================================================
+FILE: DTOs\ServiceUsages\ServiceUsageDetailDto.cs
+==================================================
+
+namespace HotelManagementSystem.DTOs.ServiceUsages;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC: UC-F09-03 - View Service Usage Details
+// Mô tả: DTO trả thông tin chi tiết lượt sử dụng.
+// =====================================================
+
+public class ServiceUsageDetailDto
+{
+    public int Id { get; set; }
+
+    public int StayId { get; set; }
+    public string StayCode { get; set; } = string.Empty;
+
+    public int RoomId { get; set; }
+    public string RoomCode { get; set; } = string.Empty;
+
+    public int HotelServiceId { get; set; }
+    public string ServiceName { get; set; } = string.Empty;
+    public string Unit { get; set; } = string.Empty;
+
+    public decimal Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal Amount { get; set; }
+
+    public DateTime UsedAt { get; set; }
+
+    public int RecordedByAccountId { get; set; }
+    public string RecordedByName { get; set; } = string.Empty;
+
+    public string? Notes { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+}
+
+==================================================
+FILE: DTOs\ServiceUsages\ServiceUsageListDto.cs
+==================================================
+
+namespace HotelManagementSystem.DTOs.ServiceUsages;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC: UC-F09-02 - View Service Usages
+// =====================================================
+
+public class ServiceUsageListDto
+{
+    public int Id { get; set; }
+
+    public int StayId { get; set; }
+    public string StayCode { get; set; } = string.Empty;
+
+    public int RoomId { get; set; }
+    public string RoomCode { get; set; } = string.Empty;
+
+    public int HotelServiceId { get; set; }
+    public string ServiceName { get; set; } = string.Empty;
+    public string Unit { get; set; } = string.Empty;
+
+    public decimal Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal Amount { get; set; }
+
+    public DateTime UsedAt { get; set; }
+    public int RecordedByAccountId { get; set; }
+
+    public string? Notes { get; set; }
+}
+
+==================================================
+FILE: Program.cs
+==================================================
+
+using HotelManagementSystem.Data;
+using HotelManagementSystem.Repositories.Implementations;
+using HotelManagementSystem.Repositories.Interfaces;
+using HotelManagementSystem.Services;
+using HotelManagementSystem.Services.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace HotelManagementSystem;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Cấu hình Database, Swagger và Dependency Injection.
+// Module: DB-01, DB-02, F07, F09, F11
+// =====================================================
+
+public class Program
+{
+    public static void Main(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // ASP.NET Core Web API và Swagger
+        // =================================================
+
+        builder.Services.AddControllers();
+        builder.Services.AddEndpointsApiExplorer();
+        builder.Services.AddSwaggerGen();
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // DB-01, DB-02: EF Core và SQL Server
+        // =================================================
+
+        builder.Services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlServer(
+                builder.Configuration.GetConnectionString(
+                    "DefaultConnection")));
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Dependency Injection: F07, F09, F11
+        // =================================================
+
+        // Repositories
+        builder.Services.AddScoped<IStayRepository, StayRepository>();
+        builder.Services.AddScoped<IInvoiceRepository, InvoiceRepository>();
+        builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
+        builder.Services.AddScoped<IServiceUsageRepository, ServiceUsageRepository>();
+        builder.Services.AddScoped<IReportRepository, ReportRepository>();
+
+        // Services
+        builder.Services.AddScoped<IStayService, StayService>();
+        builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+        builder.Services.AddScoped<IPaymentService, PaymentService>();
+        builder.Services.AddScoped<ServiceUsageService>();
+        builder.Services.AddScoped<ReportService>();
+
+        var app = builder.Build();
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Swagger - Chỉ sử dụng trong Development
+        // =================================================
+
+        if (app.Environment.IsDevelopment())
+        {
+            app.UseSwagger();
+            app.UseSwaggerUI();
+        }
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Middleware và API Routing
+        // =================================================
+
+        app.UseHttpsRedirection();
+        app.UseAuthorization();
+        app.MapControllers();
+
+        app.Run();
+    }
+}
+

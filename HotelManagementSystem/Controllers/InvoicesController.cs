@@ -1,6 +1,7 @@
-﻿
+
 using HotelManagementSystem.DTOs.Invoices;
 using HotelManagementSystem.Services;
+using HotelManagementSystem.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -21,11 +22,11 @@ namespace HotelManagementSystem.Controllers;
 [Route("HotelOps/stays/{stayId:int}/invoice")]
 public class InvoicesController : ControllerBase
 {
-    private readonly InvoiceService _service;
+    private readonly IInvoiceService _service;
     private readonly IWebHostEnvironment _environment;
 
     public InvoicesController(
-        InvoiceService service,
+        IInvoiceService service,
         IWebHostEnvironment environment)
     {
         _service = service;

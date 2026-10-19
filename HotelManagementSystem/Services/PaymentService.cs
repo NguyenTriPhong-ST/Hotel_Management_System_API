@@ -5,6 +5,7 @@ using HotelManagementSystem.Entities;
 using HotelManagementSystem.Entities.Enums;
 using HotelManagementSystem.Mappers;
 using HotelManagementSystem.Repositories.Interfaces;
+using HotelManagementSystem.Services.Interfaces;
 
 namespace HotelManagementSystem.Services;
 
@@ -23,7 +24,7 @@ namespace HotelManagementSystem.Services;
 // 200: Giao dịch đã được ghi nhận trước đó.
 // =====================================================
 
-public class PaymentService
+public class PaymentService : IPaymentService
 {
     private readonly IPaymentRepository _repository;
 

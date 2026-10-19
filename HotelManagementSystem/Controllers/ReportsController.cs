@@ -1,7 +1,8 @@
-﻿
+
 using HotelManagementSystem.DTOs.Reports;
 using HotelManagementSystem.Entities.Enums;
 using HotelManagementSystem.Services;
+using HotelManagementSystem.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace HotelManagementSystem.Controllers;
@@ -23,11 +24,11 @@ namespace HotelManagementSystem.Controllers;
 [Route("HotelOps/reports")]
 public class ReportsController : ControllerBase
 {
-    private readonly ReportService _service;
+    private readonly IReportService _service;
     private readonly IWebHostEnvironment _environment;
 
     public ReportsController(
-        ReportService service,
+        IReportService service,
         IWebHostEnvironment environment)
     {
         _service = service;

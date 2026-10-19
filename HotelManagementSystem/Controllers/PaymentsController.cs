@@ -1,6 +1,7 @@
-﻿
+
 using HotelManagementSystem.DTOs.Payments;
 using HotelManagementSystem.Services;
+using HotelManagementSystem.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -21,11 +22,11 @@ namespace HotelManagementSystem.Controllers;
 [Route("HotelOps/invoices/{invoiceId:int}/payments")]
 public class PaymentsController : ControllerBase
 {
-    private readonly PaymentService _service;
+    private readonly IPaymentService _service;
     private readonly IWebHostEnvironment _environment;
 
     public PaymentsController(
-        PaymentService service,
+        IPaymentService service,
         IWebHostEnvironment environment)
     {
         _service = service;

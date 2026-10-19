@@ -1,6 +1,7 @@
-﻿
+
 using HotelManagementSystem.DTOs.Stays;
 using HotelManagementSystem.Services;
+using HotelManagementSystem.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -22,11 +23,11 @@ namespace HotelManagementSystem.Controllers;
 [Route("HotelOps/stays")]
 public class StaysController : ControllerBase
 {
-    private readonly StayService _stayService;
+    private readonly IStayService _stayService;
     private readonly IWebHostEnvironment _environment;
 
     public StaysController(
-        StayService stayService,
+        IStayService stayService,
         IWebHostEnvironment environment)
     {
         _stayService = stayService;

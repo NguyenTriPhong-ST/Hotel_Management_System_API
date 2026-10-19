@@ -1,0 +1,633 @@
+﻿==================================================
+FILE: Services\ReportService.cs
+==================================================
+
+using HotelManagementSystem.DTOs.Reports;
+using HotelManagementSystem.Entities;
+using HotelManagementSystem.Repositories.Interfaces;
+
+namespace HotelManagementSystem.Services;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F11 - Operational Reporting
+// Layer: Service
+//
+// Swagger: https://localhost:7024/swagger
+//
+// UC-F11-01: GET /api/reports/rooms
+// UC-F11-02: GET /api/reports/reservations
+// UC-F11-03: GET /api/reports/revenue
+// UC-F11-04: GET /api/reports/tasks
+//
+// =====================================================
+
+public class ReportService
+{
+    private readonly IReportRepository _repository;
+
+    public ReportService(IReportRepository repository)
+    {
+        _repository = repository;
+    }
+
+    // NhaNT | F11
+    // Lấy tài khoản để Controller kiểm tra quyền Admin.
+    public Task<Account?> GetAccountAsync(int accountId)
+    {
+        return _repository.GetAccountAsync(accountId);
+    }
+
+    // NhaNT | UC-F11-01
+    // Thống kê phòng hiện tại và phát sinh trong kỳ.
+    public Task<RoomReportDto> GetRoomsAsync(
+        RoomReportQuery query)
+    {
+        return _repository.GetRoomsAsync(query);
+    }
+
+    // NhaNT | UC-F11-02
+    // Thống kê đặt phòng theo CheckInDate.
+    public Task<ReservationReportDto> GetReservationsAsync(
+        ReservationReportQuery query)
+    {
+        return _repository.GetReservationsAsync(query);
+    }
+
+    // NhaNT | UC-F11-03
+    // Thống kê doanh thu thực thu từ Payment.
+    public Task<RevenueReportDto> GetRevenueAsync(
+        RevenueReportQuery query)
+    {
+        return _repository.GetRevenueAsync(query);
+    }
+
+    // NhaNT | UC-F11-04
+    // Thống kê công việc theo CreatedAt/CompletedAt.
+    public Task<TaskReportDto> GetTasksAsync(
+        TaskReportQuery query)
+    {
+        return _repository.GetTasksAsync(query);
+    }
+}
+
+==================================================
+FILE: Controllers\ReportsController.cs
+==================================================
+
+using HotelManagementSystem.DTOs.Reports;
+using HotelManagementSystem.Entities.Enums;
+using HotelManagementSystem.Services;
+using Microsoft.AspNetCore.Mvc;
+
+namespace HotelManagementSystem.Controllers;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F11 - Operational Reporting
+// Swagger: https://localhost:7024/swagger
+//
+// UC-F11-01: GET /HotelOps/reports/rooms
+// UC-F11-02: GET /HotelOps/reports/reservations
+// UC-F11-03: GET /HotelOps/reports/revenue
+// UC-F11-04: GET /HotelOps/reports/tasks
+//
+// Header: X-Demo-Account-Id (Admin)
+// =====================================================
+
+[ApiController]
+[Route("HotelOps/reports")]
+public class ReportsController : ControllerBase
+{
+    private readonly ReportService _service;
+    private readonly IWebHostEnvironment _environment;
+
+    public ReportsController(
+        ReportService service,
+        IWebHostEnvironment environment)
+    {
+        _service = service;
+        _environment = environment;
+    }
+
+    // NhaNT | F11-01 đến F11-04
+    // Kiểm tra quyền Admin trong môi trường Development.
+    private async Task<IActionResult?> CheckAdminAsync(
+        int? accountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "Đang chờ tích hợp JWT."
+            });
+        }
+
+        if (!accountId.HasValue || accountId <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        var account = await _service.GetAccountAsync(
+            accountId.Value);
+
+        if (account == null ||
+            !account.IsActive ||
+            account.Role != AccountRole.Admin)
+        {
+            return StatusCode(403, new
+            {
+                message = "Chỉ Admin được xem báo cáo."
+            });
+        }
+
+        return null;
+    }
+
+    // NhaNT | F11-01 đến F11-04
+    // Kiểm tra khoảng thời gian báo cáo.
+    private IActionResult? ValidatePeriod(
+        ReportPeriodQuery query)
+    {
+        if (query.FromDate == default ||
+            query.ToDate == default)
+        {
+            return BadRequest(new
+            {
+                message = "Phải nhập fromDate và toDate."
+            });
+        }
+
+        if (query.FromDate > query.ToDate)
+        {
+            return BadRequest(new
+            {
+                message = "fromDate không được lớn hơn toDate."
+            });
+        }
+
+        if (query.ToDate == DateOnly.MaxValue)
+        {
+            return BadRequest(new
+            {
+                message = "toDate vượt giới hạn hỗ trợ."
+            });
+        }
+
+        return null;
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F11-01: Room Report
+    // GET /HotelOps/reports/rooms
+    // Header: X-Demo-Account-Id
+    // Query: fromDate, toDate, roomTypeId
+    // =================================================
+    [HttpGet("rooms")]
+    [ProducesResponseType(typeof(RoomReportDto), 200)]
+    public async Task<IActionResult> Rooms(
+        [FromQuery] RoomReportQuery query,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? accountId)
+    {
+        var auth = await CheckAdminAsync(accountId);
+        if (auth != null)
+            return auth;
+
+        var error = ValidatePeriod(query);
+        if (error != null)
+            return error;
+
+        if (query.RoomTypeId.HasValue &&
+            query.RoomTypeId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "roomTypeId phải lớn hơn 0."
+            });
+        }
+
+        return Ok(await _service.GetRoomsAsync(query));
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F11-02: Reservation Report
+    // GET /HotelOps/reports/reservations
+    // Header: X-Demo-Account-Id
+    // Query: fromDate, toDate, status, roomTypeId
+    // =================================================
+    [HttpGet("reservations")]
+    [ProducesResponseType(typeof(ReservationReportDto), 200)]
+    public async Task<IActionResult> Reservations(
+        [FromQuery] ReservationReportQuery query,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? accountId)
+    {
+        var auth = await CheckAdminAsync(accountId);
+        if (auth != null)
+            return auth;
+
+        var error = ValidatePeriod(query);
+        if (error != null)
+            return error;
+
+        if (query.RoomTypeId.HasValue &&
+            query.RoomTypeId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "roomTypeId phải lớn hơn 0."
+            });
+        }
+
+        if (query.Status.HasValue &&
+            !Enum.IsDefined(
+                typeof(ReservationStatus),
+                query.Status.Value))
+        {
+            return BadRequest(new
+            {
+                message = "ReservationStatus không hợp lệ."
+            });
+        }
+
+        return Ok(await _service.GetReservationsAsync(query));
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F11-03: Revenue Report
+    // GET /HotelOps/reports/revenue
+    // Header: X-Demo-Account-Id
+    // Query: fromDate, toDate, paymentMethod
+    // =================================================
+    [HttpGet("revenue")]
+    [ProducesResponseType(typeof(RevenueReportDto), 200)]
+    public async Task<IActionResult> Revenue(
+        [FromQuery] RevenueReportQuery query,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? accountId)
+    {
+        var auth = await CheckAdminAsync(accountId);
+        if (auth != null)
+            return auth;
+
+        var error = ValidatePeriod(query);
+        if (error != null)
+            return error;
+
+        if (query.PaymentMethod.HasValue &&
+            !Enum.IsDefined(
+                typeof(PaymentMethod),
+                query.PaymentMethod.Value))
+        {
+            return BadRequest(new
+            {
+                message = "PaymentMethod không hợp lệ."
+            });
+        }
+
+        return Ok(await _service.GetRevenueAsync(query));
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F11-04: Task Report
+    // GET /HotelOps/reports/tasks
+    // Header: X-Demo-Account-Id
+    // Query: fromDate, toDate, dateField,
+    //        taskType, status, assignedToAccountId
+    // =================================================
+    [HttpGet("tasks")]
+    [ProducesResponseType(typeof(TaskReportDto), 200)]
+    public async Task<IActionResult> Tasks(
+        [FromQuery] TaskReportQuery query,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? accountId)
+    {
+        var auth = await CheckAdminAsync(accountId);
+        if (auth != null)
+            return auth;
+
+        var error = ValidatePeriod(query);
+        if (error != null)
+            return error;
+
+        if (query.DateField != "created" &&
+            query.DateField != "completed")
+        {
+            return BadRequest(new
+            {
+                message = "dateField phải là created hoặc completed."
+            });
+        }
+
+        if (query.TaskType.HasValue &&
+            !Enum.IsDefined(
+                typeof(HotelTaskType),
+                query.TaskType.Value))
+        {
+            return BadRequest(new
+            {
+                message = "TaskType không hợp lệ."
+            });
+        }
+
+        if (query.Status.HasValue &&
+            !Enum.IsDefined(
+                typeof(HotelTaskStatus),
+                query.Status.Value))
+        {
+            return BadRequest(new
+            {
+                message = "TaskStatus không hợp lệ."
+            });
+        }
+
+        if (query.AssignedToAccountId.HasValue &&
+            query.AssignedToAccountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "assignedToAccountId phải lớn hơn 0."
+            });
+        }
+
+        return Ok(await _service.GetTasksAsync(query));
+    }
+}
+
+==================================================
+FILE: Repositories\Interfaces\IReportRepository.cs
+==================================================
+
+using HotelManagementSystem.DTOs.Reports;
+using HotelManagementSystem.Entities;
+
+namespace HotelManagementSystem.Repositories.Interfaces;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F11 - Operational Reporting
+// Layer: Repository Interface
+//
+// Swagger: https://localhost:7024/swagger
+// GET /api/reports/rooms
+// GET /api/reports/reservations
+// GET /api/reports/revenue
+// GET /api/reports/tasks
+//
+// Chỉ truy vấn dữ liệu, không thay đổi Database.
+// =====================================================
+
+public interface IReportRepository
+{
+    // NhaNT | UC-F11-01: Room Report.
+    Task<RoomReportDto> GetRoomsAsync(
+        RoomReportQuery query);
+
+    // NhaNT | UC-F11-02: Reservation Report.
+    Task<ReservationReportDto> GetReservationsAsync(
+        ReservationReportQuery query);
+
+    // NhaNT | UC-F11-03: Revenue Report.
+    Task<RevenueReportDto> GetRevenueAsync(
+        RevenueReportQuery query);
+
+    // NhaNT | UC-F11-04: Task Report.
+    Task<TaskReportDto> GetTasksAsync(
+        TaskReportQuery query);
+
+    // NhaNT | UC-F11-01 đến UC-F11-04.
+    // Kiểm tra tài khoản Admin cho Controller.
+    Task<Account?> GetAccountAsync(int accountId);
+}
+
+==================================================
+FILE: DTOs\Reports\ReportDtos.cs
+==================================================
+
+using HotelManagementSystem.Entities.Enums;
+
+namespace HotelManagementSystem.DTOs.Reports;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC-F11-01, F11-02, F11-03, F11-04
+// DTO: Bộ lọc và dữ liệu báo cáo vận hành.
+// =====================================================
+
+public class ReportPeriodQuery
+{
+    public DateOnly FromDate { get; set; }
+    public DateOnly ToDate { get; set; }
+}
+
+public class RoomReportQuery : ReportPeriodQuery
+{
+    public int? RoomTypeId { get; set; }
+}
+
+public class ReservationReportQuery : ReportPeriodQuery
+{
+    public int? RoomTypeId { get; set; }
+    public ReservationStatus? Status { get; set; }
+}
+
+public class RevenueReportQuery : ReportPeriodQuery
+{
+    public PaymentMethod? PaymentMethod { get; set; }
+}
+
+public class TaskReportQuery : ReportPeriodQuery
+{
+    public HotelTaskType? TaskType { get; set; }
+    public HotelTaskStatus? Status { get; set; }
+    public int? AssignedToAccountId { get; set; }
+
+    // created hoặc completed
+    public string DateField { get; set; } = "created";
+}
+
+// Dùng chung cho các nhóm thống kê.
+public class ReportCountItem
+{
+    public string Key { get; set; } = "";
+    public int Count { get; set; }
+}
+
+// =====================================================
+// F11-01 - Room Report
+// =====================================================
+
+public class RoomReportDto
+{
+    public DateOnly FromDate { get; set; }
+    public DateOnly ToDate { get; set; }
+    public int TotalRooms { get; set; }
+    public int ActiveRooms { get; set; }
+    public int OutOfServiceRooms { get; set; }
+    public int CurrentlyOccupiedRooms { get; set; }
+    public int CurrentlyVacantRooms { get; set; }
+    public int CurrentlyBlockedRooms { get; set; }
+
+    // Thống kê phát sinh trong khoảng thời gian.
+    public int RoomsWithStaysInPeriod { get; set; }
+    public int StayCountInPeriod { get; set; }
+    public int RoomsWithReservationsInPeriod { get; set; }
+    public int RoomsBlockedInPeriod { get; set; }
+
+    public List<ReportCountItem> ByHousekeepingStatus { get; set; } = new();
+    public List<ReportCountItem> ByRoomType { get; set; } = new();
+}
+
+// =====================================================
+// F11-02 - Reservation Report
+// =====================================================
+
+public class ReservationReportDto
+{
+    public DateOnly FromDate { get; set; }
+    public DateOnly ToDate { get; set; }
+    public string DateField { get; set; } = "CheckInDate";
+    public int TotalReservations { get; set; }
+    public int TotalBookedNights { get; set; }
+    public int TotalGuests { get; set; }
+
+    public List<ReportCountItem> ByStatus { get; set; } = new();
+    public List<ReportCountItem> ByRoomType { get; set; } = new();
+}
+
+// =====================================================
+// F11-03 - Revenue Report
+// =====================================================
+
+public class RevenueMethodItem
+{
+    public string Method { get; set; } = "";
+    public int PaymentCount { get; set; }
+    public decimal Amount { get; set; }
+}
+
+public class RevenueReportDto
+{
+    public DateOnly FromDate { get; set; }
+    public DateOnly ToDate { get; set; }
+    public string DateField { get; set; } = "PaidAt (UTC)";
+    public int PaymentCount { get; set; }
+    public decimal TotalRevenue { get; set; }
+    public List<RevenueMethodItem> ByMethod { get; set; } = new();
+}
+
+// =====================================================
+// F11-04 - Task Report
+// =====================================================
+
+public class TaskReportDto
+{
+    public DateOnly FromDate { get; set; }
+    public DateOnly ToDate { get; set; }
+    public string DateField { get; set; } = "CreatedAt";
+    public int TotalTasks { get; set; }
+    public int CompletedTasks { get; set; }
+    public int UncompletedTasks { get; set; }
+    public int AssignedTasks { get; set; }
+
+    public List<ReportCountItem> ByTaskType { get; set; } = new();
+    public List<ReportCountItem> ByStatus { get; set; } = new();
+}
+
+==================================================
+FILE: Program.cs
+==================================================
+
+using HotelManagementSystem.Data;
+using HotelManagementSystem.Repositories.Implementations;
+using HotelManagementSystem.Repositories.Interfaces;
+using HotelManagementSystem.Services;
+using HotelManagementSystem.Services.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace HotelManagementSystem;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Cấu hình Database, Swagger và Dependency Injection.
+// Module: DB-01, DB-02, F07, F09, F11
+// =====================================================
+
+public class Program
+{
+    public static void Main(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // ASP.NET Core Web API và Swagger
+        // =================================================
+
+        builder.Services.AddControllers();
+        builder.Services.AddEndpointsApiExplorer();
+        builder.Services.AddSwaggerGen();
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // DB-01, DB-02: EF Core và SQL Server
+        // =================================================
+
+        builder.Services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlServer(
+                builder.Configuration.GetConnectionString(
+                    "DefaultConnection")));
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Dependency Injection: F07, F09, F11
+        // =================================================
+
+        // Repositories
+        builder.Services.AddScoped<IStayRepository, StayRepository>();
+        builder.Services.AddScoped<IInvoiceRepository, InvoiceRepository>();
+        builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
+        builder.Services.AddScoped<IServiceUsageRepository, ServiceUsageRepository>();
+        builder.Services.AddScoped<IReportRepository, ReportRepository>();
+
+        // Services
+        builder.Services.AddScoped<IStayService, StayService>();
+        builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+        builder.Services.AddScoped<IPaymentService, PaymentService>();
+        builder.Services.AddScoped<IServiceUsageService, ServiceUsageService>();
+        builder.Services.AddScoped<ReportService>();
+
+        var app = builder.Build();
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Swagger - Chỉ sử dụng trong Development
+        // =================================================
+
+        if (app.Environment.IsDevelopment())
+        {
+            app.UseSwagger();
+            app.UseSwaggerUI();
+        }
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Middleware và API Routing
+        // =================================================
+
+        app.UseHttpsRedirection();
+        app.UseAuthorization();
+        app.MapControllers();
+
+        app.Run();
+    }
+}
+

@@ -2,6 +2,7 @@
 using HotelManagementSystem.DTOs.Reports;
 using HotelManagementSystem.Entities;
 using HotelManagementSystem.Repositories.Interfaces;
+using HotelManagementSystem.Services.Interfaces;
 
 namespace HotelManagementSystem.Services;
 
@@ -19,7 +20,7 @@ namespace HotelManagementSystem.Services;
 //
 // =====================================================
 
-public class ReportService
+public class ReportService : IReportService
 {
     private readonly IReportRepository _repository;
 

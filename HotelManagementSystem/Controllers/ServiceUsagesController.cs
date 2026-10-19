@@ -1,6 +1,7 @@
-﻿
+
 using HotelManagementSystem.DTOs.ServiceUsages;
 using HotelManagementSystem.Services;
+using HotelManagementSystem.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -24,11 +25,11 @@ namespace HotelManagementSystem.Controllers;
 [Route("HotelOps/service-usages")]
 public class ServiceUsagesController : ControllerBase
 {
-    private readonly ServiceUsageService _service;
+    private readonly IServiceUsageService _service;
     private readonly IWebHostEnvironment _environment;
 
     public ServiceUsagesController(
-        ServiceUsageService service,
+        IServiceUsageService service,
         IWebHostEnvironment environment)
     {
         _service = service;

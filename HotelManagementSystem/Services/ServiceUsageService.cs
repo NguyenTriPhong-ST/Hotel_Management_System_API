@@ -5,6 +5,7 @@ using HotelManagementSystem.Entities;
 using HotelManagementSystem.Entities.Enums;
 using HotelManagementSystem.Mappers;
 using HotelManagementSystem.Repositories.Interfaces;
+using HotelManagementSystem.Services.Interfaces;
 
 namespace HotelManagementSystem.Services;
 
@@ -23,7 +24,7 @@ namespace HotelManagementSystem.Services;
 // Service xử lý nghiệp vụ qua Repository.
 // =====================================================
 
-public class ServiceUsageService
+public class ServiceUsageService : IServiceUsageService
 {
     private readonly IServiceUsageRepository _repository;
 

@@ -5,6 +5,7 @@ using HotelManagementSystem.Entities;
 using HotelManagementSystem.Entities.Enums;
 using HotelManagementSystem.Mappers;
 using HotelManagementSystem.Repositories.Interfaces;
+using HotelManagementSystem.Services.Interfaces;
 
 namespace HotelManagementSystem.Services;
 
@@ -28,7 +29,7 @@ namespace HotelManagementSystem.Services;
 // Mapper: InvoiceMapper
 // =====================================================
 
-public class InvoiceService
+public class InvoiceService : IInvoiceService
 {
     private readonly IInvoiceRepository _repository;
 

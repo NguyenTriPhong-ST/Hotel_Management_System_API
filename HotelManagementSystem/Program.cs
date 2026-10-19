@@ -3,6 +3,7 @@ using HotelManagementSystem.Data;
 using HotelManagementSystem.Repositories.Implementations;
 using HotelManagementSystem.Repositories.Interfaces;
 using HotelManagementSystem.Services;
+using HotelManagementSystem.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace HotelManagementSystem;
@@ -51,11 +52,11 @@ public class Program
         builder.Services.AddScoped<IReportRepository, ReportRepository>();
 
         // Services
-        builder.Services.AddScoped<StayService>();
-        builder.Services.AddScoped<InvoiceService>();
-        builder.Services.AddScoped<PaymentService>();
-        builder.Services.AddScoped<ServiceUsageService>();
-        builder.Services.AddScoped<ReportService>();
+        builder.Services.AddScoped<IStayService, StayService>();
+        builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+        builder.Services.AddScoped<IPaymentService, PaymentService>();
+        builder.Services.AddScoped<IServiceUsageService, ServiceUsageService>();
+        builder.Services.AddScoped<IReportService, ReportService>();
 
         var app = builder.Build();
 

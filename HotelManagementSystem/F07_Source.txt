@@ -1,0 +1,2457 @@
+﻿==================================================
+FILE: Services\StayService.cs
+==================================================
+
+using System.Text.Json;
+using HotelManagementSystem.DTOs.Stays;
+using HotelManagementSystem.Entities;
+using HotelManagementSystem.Entities.Enums;
+using HotelManagementSystem.Repositories.Interfaces;
+
+namespace HotelManagementSystem.Services;
+
+// =====================================================
+// Developer: NhaNT
+// Module: F07 - Stay Management
+// Layer: Service
+//
+// UC-F07-01: Check-in
+// UC-F07-02: View Stays
+// UC-F07-03: View Stay Detail
+// UC-F07-06: Check-out
+// UC-F07-07: Search & Filter Stays
+//
+// Swagger: https://localhost:7024/swagger
+// POST /api/stays/check-in
+// GET  /api/stays/{id}
+// POST /api/stays/{id}/check-out
+//
+//
+// Xử lý nghiệp vụ qua IStayRepository.
+// =====================================================
+
+public class StayService
+{
+    private readonly IStayRepository _repository;
+
+    public StayService(IStayRepository repository)
+    {
+        _repository = repository;
+    }
+
+    // =================================================
+    // Developer: NhaNT
+    // UC-F07-01: Check-in
+    // API: POST /api/stays/check-in
+    //
+    // Kiểm tra Reservation, phòng, khách và tạo Stay.
+    // Tất cả thay đổi được lưu trong một transaction.
+    // =================================================
+
+    public async Task<CheckInResponse> CheckInAsync(
+        CheckInRequest request,
+        int accountId)
+    {
+        await using var transaction =
+            await _repository.BeginTransactionAsync();
+
+        // NhaNT | F07-01
+        // Kiểm tra tài khoản Receptionist.
+        var account =
+            await _repository.GetAccountAsync(accountId);
+
+        if (account == null ||
+            !account.IsActive ||
+            account.Role != AccountRole.Receptionist)
+        {
+            throw new StayBusinessException(
+                403,
+                "Tài khoản không có quyền check-in.");
+        }
+
+        // NhaNT | F07-01
+        // Reservation phải tồn tại và Confirmed.
+        var reservation =
+            await _repository.GetReservationForCheckInAsync(
+                request.ReservationId);
+
+        if (reservation == null)
+        {
+            throw new StayBusinessException(
+                404,
+                "Không tìm thấy Reservation.");
+        }
+
+        if (reservation.Status != ReservationStatus.Confirmed)
+        {
+            throw new StayBusinessException(
+                409,
+                "Reservation không ở trạng thái Confirmed.");
+        }
+
+        // NhaNT | F07-01
+        // Kiểm tra ngày nhận phòng theo giờ Việt Nam.
+        var now = DateTime.UtcNow;
+
+        var vietnamToday = DateOnly.FromDateTime(
+            now.AddHours(7));
+
+        if (vietnamToday < reservation.CheckInDate ||
+            vietnamToday >= reservation.CheckOutDate)
+        {
+            throw new StayBusinessException(
+                409,
+                "Ngày hiện tại nằm ngoài thời gian nhận phòng.");
+        }
+
+        // NhaNT | F07-01
+        // Phòng phải hoạt động và đã Inspected.
+        var room = reservation.Room;
+
+        if (room.DeletedAt != null ||
+            room.OperationalStatus !=
+                RoomOperationalStatus.Active)
+        {
+            throw new StayBusinessException(
+                409,
+                "Phòng không còn hoạt động.");
+        }
+
+        if (room.HousekeepingStatus !=
+            HousekeepingStatus.Inspected)
+        {
+            throw new StayBusinessException(
+                409,
+                "Phòng chưa đạt trạng thái Inspected.");
+        }
+
+        // NhaNT | F07-01
+        // Không cho nhận phòng nếu đang có khách.
+        var hasActiveStay =
+            await _repository.HasActiveStayAsync(room.Id);
+
+        if (hasActiveStay)
+        {
+            throw new StayBusinessException(
+                409,
+                "Phòng đang có khách lưu trú.");
+        }
+
+        // NhaNT | F07-01
+        // Không cho nhận phòng đang bị khóa/bảo trì.
+        var isBlocked =
+            await _repository.IsRoomBlockedAsync(
+                room.Id, now);
+
+        if (isBlocked)
+        {
+            throw new StayBusinessException(
+                409,
+                "Phòng đang bị khóa hoặc bảo trì.");
+        }
+
+        // NhaNT | F07-01
+        // Kiểm tra danh sách khách thực tế.
+        var guestIds = request.GuestIds
+            .Distinct()
+            .ToList();
+
+        if (guestIds.Count != request.GuestIds.Count)
+        {
+            throw new StayBusinessException(
+                400,
+                "Danh sách khách có ID trùng nhau.");
+        }
+
+        if (guestIds.Count == 0)
+        {
+            throw new StayBusinessException(
+                400,
+                "Phải có ít nhất một khách nhận phòng.");
+        }
+
+        // Khách đại diện phải tham gia nhận phòng.
+        if (!guestIds.Contains(reservation.GuestId))
+        {
+            throw new StayBusinessException(
+                400,
+                "Thiếu khách đại diện của Reservation.");
+        }
+
+        // Không vượt sức chứa hoặc số lượng đã đặt.
+        if (guestIds.Count > reservation.CapacitySnapshot)
+        {
+            throw new StayBusinessException(
+                400,
+                "Số khách vượt quá sức chứa đã chốt.");
+        }
+
+        if (guestIds.Count > reservation.NumberOfGuests)
+        {
+            throw new StayBusinessException(
+                400,
+                "Số khách vượt số lượng đã đặt.");
+        }
+
+        // NhaNT | F07-01
+        // Kiểm tra toàn bộ Guest ID còn hợp lệ.
+        var validGuestCount =
+            await _repository.CountValidGuestsAsync(
+                guestIds);
+
+        if (validGuestCount != guestIds.Count)
+        {
+            throw new StayBusinessException(
+                400,
+                "Có khách không tồn tại hoặc đã bị lưu trữ.");
+        }
+
+        // NhaNT | F07-01
+        // Chống check-in lặp cùng Reservation.
+        var alreadyCheckedIn =
+            await _repository.HasStayForReservationAsync(
+                reservation.Id);
+
+        if (alreadyCheckedIn)
+        {
+            throw new StayBusinessException(
+                409,
+                "Reservation đã được check-in trước đó.");
+        }
+
+        // NhaNT | F07-01
+        // Tạo Stay với mã nghiệp vụ duy nhất.
+        var stay = new Stay
+        {
+            StayCode = $"ST-{Guid.NewGuid():N}"[..19],
+            ReservationId = reservation.Id,
+            RoomId = room.Id,
+            CheckedInAt = now,
+            CheckedInByAccountId = accountId,
+            Notes = request.Notes
+        };
+
+        // NhaNT | F07-01
+        // Thêm khách thực tế và xác định khách chính.
+        foreach (var guestId in guestIds)
+        {
+            stay.StayGuests.Add(new StayGuest
+            {
+                GuestId = guestId,
+                IsMainGuest =
+                    guestId == reservation.GuestId,
+                AddedAt = now
+            });
+        }
+
+        _repository.AddStay(stay);
+
+        // NhaNT | F07-01
+        // Chuyển Reservation sang CheckedIn.
+        reservation.Status = ReservationStatus.CheckedIn;
+
+        // Lưu để nhận StayId.
+        await _repository.SaveChangesAsync();
+
+        // NhaNT | F07-01
+        // Ghi AuditLog trong cùng transaction.
+        // Khi tích hợp LOG-01 cần tránh ghi log trùng.
+        _repository.AddAuditLog(new AuditLog
+        {
+            ActorAccountId = accountId,
+            ActorUsernameSnapshot = account.Username,
+            Action = "CheckIn",
+            EntityType = "Stay",
+            EntityId = stay.Id.ToString(),
+            EntityCodeSnapshot = stay.StayCode,
+            OccurredAt = now,
+            Summary =
+                $"Check-in Reservation " +
+                $"{reservation.ReservationCode} " +
+                $"vào phòng {room.RoomCode}.",
+            CorrelationId = Guid.NewGuid().ToString()
+        });
+
+        await _repository.SaveChangesAsync();
+
+        // NhaNT | F07-01
+        // Commit khi tất cả thao tác thành công.
+        await transaction.CommitAsync();
+
+        return new CheckInResponse
+        {
+            StayId = stay.Id,
+            StayCode = stay.StayCode,
+
+            ReservationId = reservation.Id,
+            ReservationCode = reservation.ReservationCode,
+
+            RoomId = room.Id,
+            RoomCode = room.RoomCode,
+
+            MainGuestId = reservation.GuestId,
+            GuestIds = guestIds,
+
+            CheckedInAt = stay.CheckedInAt,
+            CheckedInByAccountId = accountId,
+
+            ReservationStatus =
+                reservation.Status.ToString(),
+
+            Message = "Check-in thành công."
+        };
+    }
+
+    // =================================================
+    // Developer: NhaNT
+    // UC-F07-02: View Stays
+    // UC-F07-07: Search & Filter Stays
+    //
+    //
+    // Test danh sách:
+    //
+    // Test lọc:
+    //
+    // Test tìm theo mã:
+    //
+    // Test sắp xếp:
+    //
+    // Test phân trang:
+    // =================================================
+
+    public IQueryable<StayListDto> GetStays()
+    {
+        // NhaNT | F07-02, F07-07
+        return _repository.QueryStayViews();
+    }
+
+    // =================================================
+    // Developer: NhaNT
+    // UC-F07-03: View Stay Detail
+    // API: GET /api/stays/{id}
+    //
+    // Trả Stay, Reservation, Room, Guest và dịch vụ.
+    // =================================================
+
+    public async Task<StayDetailDto?> GetStayDetailAsync(
+        int id)
+    {
+        // NhaNT | F07-03
+        // Lấy thông tin chính của Stay.
+        var stay =
+            await _repository.GetStayDetailAsync(id);
+
+        if (stay == null)
+        {
+            return null;
+        }
+
+        // NhaNT | F07-03
+        // Lấy khách thực tế trong Stay.
+        stay.Guests =
+            await _repository.GetStayGuestsAsync(id);
+
+        // NhaNT | F07-03
+        // Chỉ lấy dịch vụ chưa bị xóa mềm.
+        stay.ServiceUsages =
+            await _repository.GetStayServiceUsagesAsync(id);
+
+        return stay;
+    }
+
+    // =================================================
+    // Developer: NhaNT
+    // UC-F07-06: Check-out
+    // API: POST /api/stays/{id}/check-out
+    //
+    // Chỉ trả phòng khi Invoice đã chốt và đủ tiền.
+    // =================================================
+
+    public async Task<CheckOutResponse> CheckOutAsync(
+        int stayId,
+        int accountId)
+    {
+        await using var transaction =
+            await _repository.BeginTransactionAsync();
+
+        // NhaNT | F07-06
+        // Kiểm tra quyền Receptionist.
+        var account =
+            await _repository.GetAccountAsync(accountId);
+
+        if (account == null ||
+            !account.IsActive ||
+            account.Role != AccountRole.Receptionist)
+        {
+            throw new InvoiceBusinessException(
+                403,
+                "Tài khoản không có quyền check-out.");
+        }
+
+        // NhaNT | F07-06
+        // Stay phải tồn tại và chưa check-out.
+        var stay =
+            await _repository.GetStayForCheckOutAsync(
+                stayId);
+
+        if (stay == null)
+        {
+            throw new InvoiceBusinessException(
+                404,
+                "Không tìm thấy Stay.");
+        }
+
+        if (stay.CheckedOutAt != null)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Stay đã check-out trước đó.");
+        }
+
+        // NhaNT | F07-06
+        // Invoice bắt buộc đã Finalized.
+        var invoice =
+            await _repository.GetInvoiceByStayIdAsync(
+                stayId);
+
+        if (invoice == null ||
+            invoice.Status != InvoiceStatus.Finalized)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Hóa đơn chưa được Finalized.");
+        }
+
+        // NhaNT | F07-06
+        // Kiểm tra tổng Payment bằng tổng Invoice.
+        var totalPaid =
+            await _repository.GetTotalPaidAsync(invoice.Id);
+
+        if (totalPaid != invoice.TotalAmount)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                $"Chưa thanh toán đủ. " +
+                $"Tổng hóa đơn: {invoice.TotalAmount}, " +
+                $"Đã thanh toán: {totalPaid}, " +
+                $"Còn lại: {invoice.TotalAmount - totalPaid}.");
+        }
+
+        var now = DateTime.UtcNow;
+
+        // NhaNT | F07-06
+        // Kết thúc thời gian lưu trú.
+        stay.CheckedOutAt = now;
+        stay.CheckedOutByAccountId = accountId;
+
+        // Hoàn tất Reservation.
+        stay.Reservation.Status =
+            ReservationStatus.Completed;
+
+        // Phòng chuyển Dirty để chờ dọn.
+        stay.Room.HousekeepingStatus =
+            HousekeepingStatus.Dirty;
+
+        // NhaNT | F07-06
+        // Ghi AuditLog trong cùng transaction.
+        _repository.AddAuditLog(new AuditLog
+        {
+            ActorAccountId = accountId,
+            ActorUsernameSnapshot = account.Username,
+            Action = "CheckOut",
+            EntityType = "Stay",
+            EntityId = stay.Id.ToString(),
+            EntityCodeSnapshot = stay.StayCode,
+            OccurredAt = now,
+
+            Summary =
+                $"Check-out Stay {stay.StayCode}, " +
+                $"phòng {stay.Room.RoomCode}.",
+
+            NewValuesJson = JsonSerializer.Serialize(new
+            {
+                stay.CheckedOutAt,
+                stay.CheckedOutByAccountId,
+                ReservationStatus = "Completed",
+                HousekeepingStatus = "Dirty",
+                invoice.TotalAmount,
+                TotalPaid = totalPaid
+            })
+        });
+
+        // NhaNT | F07-06
+        // Lưu và commit các cập nhật đồng bộ.
+        await _repository.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return new CheckOutResponse
+        {
+            StayId = stay.Id,
+            StayCode = stay.StayCode,
+            ReservationId = stay.ReservationId,
+            RoomId = stay.RoomId,
+            RoomCode = stay.Room.RoomCode,
+
+            CheckedOutAt = now,
+            CheckedOutByAccountId = accountId,
+
+            InvoiceTotal = invoice.TotalAmount,
+            TotalPaid = totalPaid,
+
+            ReservationStatus = "Completed",
+            HousekeepingStatus = "Dirty",
+
+            Message = "Check-out thành công."
+        };
+    }
+}
+
+// =====================================================
+// Developer: NhaNT
+// UC-F07-01: Business Exception
+// Trả HTTP status tương ứng lỗi nghiệp vụ.
+// =====================================================
+
+public class StayBusinessException : Exception
+{
+    public int StatusCode { get; }
+
+    public StayBusinessException(
+        int statusCode,
+        string message) : base(message)
+    {
+        StatusCode = statusCode;
+    }
+}
+
+==================================================
+FILE: Services\InvoiceService.cs
+==================================================
+
+using System.Text.Json;
+using HotelManagementSystem.DTOs.Invoices;
+using HotelManagementSystem.Entities;
+using HotelManagementSystem.Entities.Enums;
+using HotelManagementSystem.Mappers;
+using HotelManagementSystem.Repositories.Interfaces;
+
+namespace HotelManagementSystem.Services;
+
+// =====================================================
+// Developer: NhaNT
+// UC-F07-04: Calculate & Finalize Invoice
+// Service xử lý nghiệp vụ tính tiền và chốt hóa đơn.
+//
+// SWAGGER: https://localhost:7024/swagger
+//
+// TEST 1 - TÍNH HÓA ĐƠN:
+// POST /api/stays/{stayId}/invoice/calculate
+//
+// TEST 2 - CHỐT HÓA ĐƠN:
+// POST /api/stays/{stayId}/invoice/finalize
+//
+// Header: X-Demo-Account-Id (Development)
+// Body: Không có (stayId truyền qua route).
+//
+// Repository: IInvoiceRepository
+// Mapper: InvoiceMapper
+// =====================================================
+
+public class InvoiceService
+{
+    private readonly IInvoiceRepository _repository;
+
+    public InvoiceService(IInvoiceRepository repository)
+    {
+        _repository = repository;
+    }
+
+    // NhaNT | F07-04
+    // Làm tròn tiền đến hai chữ số thập phân.
+    private static decimal Money(decimal amount)
+    {
+        return Math.Round(
+            amount, 2, MidpointRounding.AwayFromZero);
+    }
+
+    // NhaNT | F07-04
+    // Chỉ Receptionist đang hoạt động được lập hóa đơn.
+    private async Task<Account> GetReceptionistAsync(
+        int accountId)
+    {
+        var account =
+            await _repository.GetAccountAsync(accountId);
+
+        if (account == null || !account.IsActive)
+        {
+            throw new InvoiceBusinessException(
+                403,
+                "Tài khoản không tồn tại hoặc đã bị khóa.");
+        }
+
+        if (account.Role != AccountRole.Receptionist)
+        {
+            throw new InvoiceBusinessException(
+                403,
+                "Chỉ Receptionist được xử lý hóa đơn.");
+        }
+
+        return account;
+    }
+
+    // NhaNT | F07-04
+    // Chỉ lập hóa đơn cho Stay chưa check-out.
+    private async Task<Stay> GetActiveStayAsync(int stayId)
+    {
+        var stay = await _repository.GetStayAsync(stayId);
+
+        if (stay == null)
+        {
+            throw new InvoiceBusinessException(
+                404, "Không tìm thấy Stay.");
+        }
+
+        if (stay.CheckedOutAt != null)
+        {
+            throw new InvoiceBusinessException(
+                409, "Stay đã check-out.");
+        }
+
+        return stay;
+    }
+
+    // NhaNT | F07-04
+    // Số đêm dựa trên lịch Reservation, tối thiểu 1.
+    private static int GetNights(Reservation reservation)
+    {
+        return Math.Max(
+            1,
+            reservation.CheckOutDate.DayNumber -
+            reservation.CheckInDate.DayNumber);
+    }
+
+    // NhaNT | F07-04
+    // Dùng giá phòng đã chốt khi đặt phòng.
+    private static decimal GetRoomAmount(
+        Reservation reservation)
+    {
+        return Money(
+            GetNights(reservation) * reservation.NightlyRate);
+    }
+
+    // NhaNT | F07-04
+    // Đọc InvoiceLines và chuyển kết quả qua Mapper.
+    private async Task<InvoiceResultDto> BuildResultAsync(
+        Invoice invoice,
+        string stayCode)
+    {
+        var lines =
+            await _repository.GetLinesReadOnlyAsync(invoice.Id);
+
+        return InvoiceMapper.ToResultDto(
+            invoice,
+            stayCode,
+            lines);
+    }
+
+    // =================================================
+    // Developer: NhaNT
+    // UC-F07-04A: Calculate Invoice Draft
+    //
+    // SWAGGER: https://localhost:7024/swagger
+    // Method: POST
+    // Endpoint: /api/stays/{stayId}/invoice/calculate
+    // Header: X-Demo-Account-Id
+    // Input: stayId
+    // Kết quả: Tạo/cập nhật Invoice Draft.
+    // =================================================
+
+    public async Task<InvoiceResultDto> CalculateAsync(
+        int stayId,
+        int accountId)
+    {
+        await using var transaction =
+            await _repository.BeginTransactionAsync();
+
+        // NhaNT | F07-04
+        // Kiểm tra quyền và Stay.
+        var account = await GetReceptionistAsync(accountId);
+        var stay = await GetActiveStayAsync(stayId);
+        var reservation = stay.Reservation;
+
+        // NhaNT | F07-04
+        // Kiểm tra ngày đặt và giá phòng.
+        if (reservation.NightlyRate < 0 ||
+            reservation.CheckOutDate <= reservation.CheckInDate)
+        {
+            throw new InvoiceBusinessException(
+                409, "Dữ liệu đặt phòng không hợp lệ.");
+        }
+
+        // NhaNT | F07-04
+        // Chỉ tính dịch vụ chưa bị xóa mềm.
+        var usages = await _repository.GetUsagesAsync(stayId);
+
+        if (usages.Any(u =>
+            u.Quantity <= 0 || u.UnitPrice < 0))
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Có dữ liệu sử dụng dịch vụ không hợp lệ.");
+        }
+
+        // NhaNT | F07-04
+        // Kiểm tra Invoice đã tồn tại hay chưa.
+        var invoice = await _repository.GetInvoiceAsync(
+            stayId);
+
+        if (invoice != null &&
+            invoice.Status == InvoiceStatus.Finalized)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Hóa đơn đã Finalized, không thể tính lại.");
+        }
+
+        // NhaNT | F07-04
+        // Không tính lại khi hóa đơn đã có Payment.
+        if (invoice != null &&
+            await _repository.HasPaymentsAsync(invoice.Id))
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Hóa đơn đã có thanh toán, không thể tính lại.");
+        }
+
+        var isNew = invoice == null;
+
+        // NhaNT | F07-04
+        // Tạo Invoice Draft nếu chưa tồn tại.
+        if (invoice == null)
+        {
+            invoice = new Invoice
+            {
+                InvoiceCode = "INV-" +
+                    Guid.NewGuid().ToString("N")[..20],
+                StayId = stayId,
+                Status = InvoiceStatus.Draft,
+                CreatedByAccountId = account.Id,
+                TotalAmount = 0m
+            };
+
+            _repository.AddInvoice(invoice);
+        }
+
+        // NhaNT | F07-04
+        // Lưu thông tin snapshot cho hóa đơn.
+        invoice.BillingFromDate =
+            reservation.CheckInDate;
+
+        invoice.BillingToDate =
+            reservation.CheckOutDate;
+
+        invoice.GuestNameSnapshot =
+            reservation.Guest.FullName;
+
+        invoice.GuestDocumentSnapshot =
+            reservation.Guest.DocumentNumber;
+
+        invoice.RoomCodeSnapshot = stay.Room.RoomCode;
+
+        // Lưu trước để có InvoiceId.
+        await _repository.SaveChangesAsync();
+
+        // NhaNT | F07-04
+        // Xóa InvoiceLines cũ nếu tính lại Draft.
+        var oldLines =
+            await _repository.GetLinesAsync(invoice.Id);
+
+        if (oldLines.Count > 0)
+        {
+            _repository.RemoveLines(oldLines);
+            await _repository.SaveChangesAsync();
+        }
+
+        // NhaNT | F07-04
+        // Thêm một dòng tiền phòng.
+        var nights = GetNights(reservation);
+
+        _repository.AddLine(new InvoiceLine
+        {
+            InvoiceId = invoice.Id,
+            LineType = InvoiceLineType.RoomCharge,
+            ServiceUsageId = null,
+            Description =
+                $"Tiền phòng {stay.Room.RoomCode}",
+            Unit = "dem",
+            Quantity = nights,
+            UnitPrice = reservation.NightlyRate
+        });
+
+        // NhaNT | F07-04
+        // Thêm dòng phí từ ServiceUsage snapshot.
+        foreach (var usage in usages)
+        {
+            _repository.AddLine(new InvoiceLine
+            {
+                InvoiceId = invoice.Id,
+                LineType = InvoiceLineType.ServiceCharge,
+                ServiceUsageId = usage.Id,
+                Description = usage.ServiceNameSnapshot,
+                Unit = usage.UnitSnapshot,
+                Quantity = usage.Quantity,
+                UnitPrice = usage.UnitPrice
+            });
+        }
+
+        // SQL Server tính cột InvoiceLine.Amount.
+        await _repository.SaveChangesAsync();
+
+        // NhaNT | F07-04
+        // Đồng bộ TotalAmount từ InvoiceLines.
+        invoice.TotalAmount =
+            await _repository.GetLineTotalAsync(invoice.Id);
+
+        var expectedTotal =
+            GetRoomAmount(reservation) +
+            usages.Sum(u =>
+                Money(u.Quantity * u.UnitPrice));
+
+        if (invoice.TotalAmount != expectedTotal)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Tổng tiền hóa đơn không khớp các khoản phí.");
+        }
+
+        // NhaNT | F07-04
+        // Ghi AuditLog trong cùng transaction.
+        _repository.AddAuditLog(new AuditLog
+        {
+            ActorAccountId = account.Id,
+            ActorUsernameSnapshot = account.Username,
+            Action = isNew
+                ? "CalculateInvoice"
+                : "RecalculateInvoice",
+            EntityType = "Invoice",
+            EntityId = invoice.Id.ToString(),
+            EntityCodeSnapshot = invoice.InvoiceCode,
+            OccurredAt = DateTime.UtcNow,
+            Summary =
+                $"Tính hóa đơn Draft cho Stay {stayId}.",
+            NewValuesJson = JsonSerializer.Serialize(new
+            {
+                invoice.TotalAmount,
+                Nights = nights,
+                ServiceCount = usages.Count
+            })
+        });
+
+        await _repository.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return await BuildResultAsync(
+            invoice, stay.StayCode);
+    }
+
+    // =================================================
+    // Developer: NhaNT
+    // UC-F07-04B: Finalize Invoice
+    //
+    // SWAGGER: https://localhost:7024/swagger
+    // Method: POST
+    // Endpoint: /api/stays/{stayId}/invoice/finalize
+    // Header: X-Demo-Account-Id
+    // Input: stayId
+    // Kết quả: Chốt Invoice, khóa sửa chi phí.
+    // =================================================
+
+    public async Task<InvoiceResultDto> FinalizeAsync(
+        int stayId,
+        int accountId)
+    {
+        await using var transaction =
+            await _repository.BeginTransactionAsync();
+
+        // NhaNT | F07-04
+        // Kiểm tra Receptionist và Stay.
+        var account = await GetReceptionistAsync(accountId);
+        var stay = await GetActiveStayAsync(stayId);
+
+        // NhaNT | F07-04
+        // Invoice Draft phải tồn tại.
+        var invoice =
+            await _repository.GetInvoiceAsync(stayId);
+
+        if (invoice == null)
+        {
+            throw new InvoiceBusinessException(
+                404,
+                "Chưa có hóa đơn Draft. Hãy Calculate trước.");
+        }
+
+        if (invoice.Status == InvoiceStatus.Finalized)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Hóa đơn đã được chốt trước đó.");
+        }
+
+        // NhaNT | F07-04
+        // Draft không được có thanh toán.
+        if (await _repository.HasPaymentsAsync(invoice.Id))
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Hóa đơn Draft đã có thanh toán bất thường.");
+        }
+
+        // NhaNT | F07-04
+        // Kiểm tra số dòng phí phòng.
+        var lines =
+            await _repository.GetLinesAsync(invoice.Id);
+
+        var roomLines = lines
+            .Where(l =>
+                l.LineType == InvoiceLineType.RoomCharge)
+            .ToList();
+
+        if (roomLines.Count != 1 ||
+            roomLines[0].ServiceUsageId != null)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Hóa đơn thiếu hoặc trùng dòng tiền phòng.");
+        }
+
+        // NhaNT | F07-04
+        // Đối chiếu giá và số đêm với Reservation.
+        var reservation = stay.Reservation;
+        var expectedNights = GetNights(reservation);
+
+        if (invoice.BillingFromDate !=
+                reservation.CheckInDate ||
+            invoice.BillingToDate !=
+                reservation.CheckOutDate ||
+            roomLines[0].Quantity != expectedNights ||
+            roomLines[0].UnitPrice !=
+                reservation.NightlyRate)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Dòng tiền phòng không khớp Reservation.");
+        }
+
+        // NhaNT | F07-04
+        // Đối chiếu dịch vụ còn hiệu lực.
+        var usages =
+            await _repository.GetUsagesAsync(stayId);
+
+        var serviceLines = lines
+            .Where(l =>
+                l.LineType == InvoiceLineType.ServiceCharge)
+            .ToList();
+
+        if (serviceLines.Count != usages.Count)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Hóa đơn chưa đồng bộ số lượng dịch vụ.");
+        }
+
+        foreach (var usage in usages)
+        {
+            var matches = serviceLines
+                .Where(l =>
+                    l.ServiceUsageId == usage.Id)
+                .ToList();
+
+            if (matches.Count != 1 ||
+                matches[0].Quantity != usage.Quantity ||
+                matches[0].UnitPrice != usage.UnitPrice ||
+                matches[0].Description !=
+                    usage.ServiceNameSnapshot ||
+                matches[0].Unit != usage.UnitSnapshot)
+            {
+                throw new InvoiceBusinessException(
+                    409,
+                    $"Chi phí dịch vụ ID {usage.Id} " +
+                    "không khớp hóa đơn.");
+            }
+        }
+
+        // NhaNT | F07-04
+        // Tổng Invoice phải khớp tổng dòng và snapshot.
+        var lineTotal =
+            await _repository.GetLineTotalAsync(invoice.Id);
+
+        var expectedTotal =
+            GetRoomAmount(reservation) +
+            usages.Sum(u =>
+                Money(u.Quantity * u.UnitPrice));
+
+        if (invoice.TotalAmount != lineTotal ||
+            lineTotal != expectedTotal)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                "Tổng tiền hóa đơn không khớp, " +
+                "hãy Calculate lại.");
+        }
+
+        // NhaNT | F07-04
+        // Chốt hóa đơn và lưu nhân viên thực hiện.
+        invoice.Status = InvoiceStatus.Finalized;
+        invoice.FinalizedAt = DateTime.UtcNow;
+        invoice.FinalizedByAccountId = account.Id;
+
+        // NhaNT | F07-04
+        // Ghi AuditLog khi Finalize.
+        _repository.AddAuditLog(new AuditLog
+        {
+            ActorAccountId = account.Id,
+            ActorUsernameSnapshot = account.Username,
+            Action = "FinalizeInvoice",
+            EntityType = "Invoice",
+            EntityId = invoice.Id.ToString(),
+            EntityCodeSnapshot = invoice.InvoiceCode,
+            OccurredAt = DateTime.UtcNow,
+            Summary =
+                $"Chốt hóa đơn cho Stay {stayId}.",
+            NewValuesJson = JsonSerializer.Serialize(new
+            {
+                invoice.TotalAmount,
+                invoice.FinalizedAt,
+                invoice.FinalizedByAccountId
+            })
+        });
+
+        await _repository.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        return await BuildResultAsync(
+            invoice, stay.StayCode);
+    }
+}
+
+// =====================================================
+// Developer: NhaNT
+// UC-F07-04: Exception nghiệp vụ hóa đơn.
+// =====================================================
+public class InvoiceBusinessException : Exception
+{
+    public int StatusCode { get; }
+
+    public InvoiceBusinessException(
+        int statusCode,
+        string message) : base(message)
+    {
+        StatusCode = statusCode;
+    }
+}
+
+==================================================
+FILE: Services\PaymentService.cs
+==================================================
+
+using System.Text.Json;
+using HotelManagementSystem.DTOs.Payments;
+using HotelManagementSystem.Entities;
+using HotelManagementSystem.Entities.Enums;
+using HotelManagementSystem.Mappers;
+using HotelManagementSystem.Repositories.Interfaces;
+
+namespace HotelManagementSystem.Services;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC-F07-05: Record Internal Payment
+// Xử lý nghiệp vụ ghi nhận thanh toán nội bộ.
+//
+// SWAGGER: https://localhost:7024/swagger
+// Method: POST
+// Endpoint: /api/invoices/{invoiceId}/payments
+// Header: X-Demo-Account-Id
+// Body: RecordPaymentRequest
+//
+// 201: Ghi nhận thanh toán mới.
+// 200: Giao dịch đã được ghi nhận trước đó.
+// =====================================================
+
+public class PaymentService
+{
+    private readonly IPaymentRepository _repository;
+
+    public PaymentService(IPaymentRepository repository)
+    {
+        _repository = repository;
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-05: Record Internal Payment
+    //
+    // Swagger: https://localhost:7024/swagger
+    // POST /api/invoices/{invoiceId}/payments
+    //
+    // Input:
+    // - invoiceId: ID hóa đơn.
+    // - accountId: Receptionist thực hiện.
+    // - request: Số tiền, phương thức, IdempotencyKey.
+    // =================================================
+    public async Task<PaymentResultDto> RecordAsync(
+        int invoiceId,
+        RecordPaymentRequest request,
+        int accountId)
+    {
+        // NhaNT | F07-05
+        // Bắt buộc có IdempotencyKey hợp lệ.
+        if (request.IdempotencyKey == null ||
+            request.IdempotencyKey == Guid.Empty)
+        {
+            throw new InvoiceBusinessException(
+                400, "IdempotencyKey không hợp lệ.");
+        }
+
+        // NhaNT | F07-05
+        // Số tiền dương và tối đa 2 chữ số thập phân.
+        if (request.Amount <= 0 ||
+            decimal.Round(request.Amount, 2) != request.Amount)
+        {
+            throw new InvoiceBusinessException(
+                400,
+                "Amount phải lớn hơn 0 và có tối đa 2 chữ số thập phân.");
+        }
+
+        // NhaNT | F07-05
+        // Chỉ chấp nhận phương thức trong PaymentMethod.
+        if (request.Method == null ||
+            !Enum.IsDefined(
+                typeof(PaymentMethod),
+                request.Method.Value))
+        {
+            throw new InvoiceBusinessException(
+                400, "Phương thức thanh toán không hợp lệ.");
+        }
+
+        // NhaNT | F07-05
+        // Toàn bộ ghi nhận Payment trong một transaction.
+        await using var transaction =
+            await _repository.BeginTransactionAsync();
+
+        // NhaNT | F07-05
+        // Chỉ Receptionist đang hoạt động được thanh toán.
+        var account =
+            await _repository.GetAccountAsync(accountId);
+
+        if (account == null ||
+            !account.IsActive ||
+            account.Role != AccountRole.Receptionist)
+        {
+            throw new InvoiceBusinessException(
+                403,
+                "Tài khoản không có quyền ghi nhận thanh toán.");
+        }
+
+        // NhaNT | F07-05
+        // Kiểm tra trùng IdempotencyKey toàn hệ thống.
+        var existing =
+            await _repository.GetByIdempotencyKeyAsync(
+                request.IdempotencyKey.Value);
+
+        if (existing != null)
+        {
+            // NhaNT | F07-05
+            // Không tái sử dụng key cho giao dịch khác.
+            if (existing.InvoiceId != invoiceId ||
+                existing.Amount != request.Amount ||
+                existing.Method != request.Method.Value)
+            {
+                throw new InvoiceBusinessException(
+                    409,
+                    "IdempotencyKey đã được sử dụng với giao dịch khác.");
+            }
+
+            // NhaNT | F07-05
+            // Trả kết quả cũ, không tạo Payment mới.
+            var sameInvoice =
+                await _repository.GetInvoiceAsync(invoiceId);
+
+            if (sameInvoice == null)
+            {
+                throw new InvoiceBusinessException(
+                    404, "Không tìm thấy hóa đơn.");
+            }
+
+            var paid =
+                await _repository.GetTotalPaidAsync(invoiceId);
+
+            return PaymentMapper.ToResultDto(
+                existing,
+                sameInvoice.TotalAmount,
+                paid,
+                "Giao dịch đã được ghi nhận trước đó.");
+        }
+
+        // NhaNT | F07-05
+        // Kiểm tra Invoice tồn tại.
+        var invoice =
+            await _repository.GetInvoiceAsync(invoiceId);
+
+        if (invoice == null)
+        {
+            throw new InvoiceBusinessException(
+                404, "Không tìm thấy hóa đơn.");
+        }
+
+        // NhaNT | F07-05
+        // Chỉ thanh toán cho hóa đơn Finalized.
+        if (invoice.Status != InvoiceStatus.Finalized)
+        {
+            throw new InvoiceBusinessException(
+                409, "Hóa đơn chưa Finalized.");
+        }
+
+        // NhaNT | F07-05
+        // Tính số dư chưa thanh toán.
+        var totalPaid =
+            await _repository.GetTotalPaidAsync(invoiceId);
+
+        var remaining = invoice.TotalAmount - totalPaid;
+
+        if (remaining <= 0)
+        {
+            throw new InvoiceBusinessException(
+                409, "Hóa đơn đã thanh toán đủ.");
+        }
+
+        if (request.Amount > remaining)
+        {
+            throw new InvoiceBusinessException(
+                409,
+                $"Số tiền vượt số dư còn lại: {remaining}.");
+        }
+
+        // NhaNT | F07-05
+        // Tạo Payment với số tiền thực tế nhận.
+        var payment = new Payment
+        {
+            ReceiptCode = "PAY-" +
+                Guid.NewGuid().ToString("N")[..20],
+
+            InvoiceId = invoiceId,
+            IdempotencyKey = request.IdempotencyKey.Value,
+            Amount = request.Amount,
+            Method = request.Method.Value,
+            PaidAt = DateTime.UtcNow,
+            RecordedByAccountId = accountId,
+            CreatedAt = DateTime.UtcNow,
+            ReferenceNumber =
+                request.ReferenceNumber?.Trim(),
+            Notes = request.Notes?.Trim()
+        };
+
+        _repository.AddPayment(payment);
+        await _repository.SaveChangesAsync();
+
+        // NhaNT | F07-05
+        // Lưu AuditLog trong cùng transaction.
+        _repository.AddAuditLog(new AuditLog
+        {
+            ActorAccountId = accountId,
+            ActorUsernameSnapshot = account.Username,
+            Action = "RecordPayment",
+            EntityType = "Payment",
+            EntityId = payment.Id.ToString(),
+            EntityCodeSnapshot = payment.ReceiptCode,
+            OccurredAt = DateTime.UtcNow,
+
+            Summary =
+                $"Ghi nhận thanh toán {payment.Amount} " +
+                $"cho Invoice {invoiceId}.",
+
+            NewValuesJson = JsonSerializer.Serialize(new
+            {
+                payment.InvoiceId,
+                payment.Amount,
+                Method = payment.Method.ToString(),
+                payment.IdempotencyKey
+            })
+        });
+
+        await _repository.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        // NhaNT | F07-05
+        // Mapper trả PaymentResultDto cho Controller.
+        return PaymentMapper.ToResultDto(
+            payment,
+            invoice.TotalAmount,
+            totalPaid + payment.Amount,
+            "Ghi nhận thanh toán thành công.");
+    }
+}
+
+==================================================
+FILE: Controllers\StaysController.cs
+==================================================
+
+using HotelManagementSystem.DTOs.Stays;
+using HotelManagementSystem.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace HotelManagementSystem.Controllers;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F07 - Stay Management
+// Swagger: https://localhost:7024/swagger
+//
+// UC-F07-01: POST /HotelOps/stays/check-in
+// UC-F07-02: GET  /HotelOps/stays
+// UC-F07-03: GET  /HotelOps/stays/{id}
+// UC-F07-06: POST /HotelOps/stays/{id}/check-out
+// UC-F07-07: GET  /HotelOps/stays (search/filter)
+// =====================================================
+
+[ApiController]
+[Route("HotelOps/stays")]
+public class StaysController : ControllerBase
+{
+    private readonly StayService _stayService;
+    private readonly IWebHostEnvironment _environment;
+
+    public StaysController(
+        StayService stayService,
+        IWebHostEnvironment environment)
+    {
+        _stayService = stayService;
+        _environment = environment;
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-01: Check-in
+    // POST /HotelOps/stays/check-in
+    // Header: X-Demo-Account-Id
+    // Body: CheckInRequest
+    // =================================================
+    [HttpPost("check-in")]
+    public async Task<IActionResult> CheckIn(
+        [FromBody] CheckInRequest request,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? demoAccountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "Chưa tích hợp JWT Authentication F01."
+            });
+        }
+
+        if (!demoAccountId.HasValue || demoAccountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        try
+        {
+            var result = await _stayService.CheckInAsync(
+                request, demoAccountId.Value);
+
+            return Ok(result);
+        }
+        catch (StayBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new
+            {
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
+            });
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new
+            {
+                message = "Xung đột dữ liệu khi check-in."
+            });
+        }
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-02: View Stays
+    // UC-F07-07: Search & Filter Stays
+    // GET /HotelOps/stays
+    //
+    // Query: search, status, page, pageSize, sort
+    //
+    // Ví dụ:
+    // GET /HotelOps/stays?page=1&pageSize=20
+    // GET /HotelOps/stays?status=Active
+    // GET /HotelOps/stays?search=ST-001
+    // GET /HotelOps/stays?sort=oldest
+    // =================================================
+    [HttpGet]
+    public async Task<IActionResult> GetStays(
+        [FromQuery] string? search,
+        [FromQuery] string? status,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string sort = "newest")
+    {
+        if (page < 1)
+        {
+            return BadRequest(new
+            {
+                message = "page phải lớn hơn hoặc bằng 1."
+            });
+        }
+
+        if (pageSize < 1 || pageSize > 100)
+        {
+            return BadRequest(new
+            {
+                message = "pageSize phải từ 1 đến 100."
+            });
+        }
+
+        var query = _stayService.GetStays();
+
+        // NhaNT | F07-07 - Tìm mã Stay, phòng hoặc tên khách.
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var keyword = search.Trim();
+
+            query = query.Where(s =>
+                s.StayCode.Contains(keyword) ||
+                s.ReservationCode.Contains(keyword) ||
+                s.RoomCode.Contains(keyword) ||
+                s.MainGuestName.Contains(keyword));
+        }
+
+        // NhaNT | F07-07 - Lọc trạng thái Stay.
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            var normalizedStatus = status.Trim();
+
+            if (!normalizedStatus.Equals(
+                    "Active", StringComparison.OrdinalIgnoreCase) &&
+                !normalizedStatus.Equals(
+                    "Completed", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new
+                {
+                    message = "status chỉ nhận Active hoặc Completed."
+                });
+            }
+
+            var expectedStatus =
+                normalizedStatus.Equals(
+                    "Active", StringComparison.OrdinalIgnoreCase)
+                    ? "Active"
+                    : "Completed";
+
+            query = query.Where(s => s.Status == expectedStatus);
+        }
+
+        // NhaNT | F07-07 - Sắp xếp có thứ tự ổn định.
+        var normalizedSort = sort.Trim().ToLowerInvariant();
+
+        query = normalizedSort switch
+        {
+            "newest" => query.OrderByDescending(s => s.Id),
+            "oldest" => query.OrderBy(s => s.Id),
+            _ => query.OrderByDescending(s => s.Id)
+        };
+
+        if (normalizedSort != "newest" &&
+            normalizedSort != "oldest")
+        {
+            return BadRequest(new
+            {
+                message = "sort chỉ nhận newest hoặc oldest."
+            });
+        }
+
+        var totalItems = await query.CountAsync();
+
+        var items = await query
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return Ok(new
+        {
+            items,
+            totalItems,
+            page,
+            pageSize,
+            totalPages = (int)Math.Ceiling(
+                totalItems / (double)pageSize)
+        });
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-03: View Stay Detail
+    // GET /HotelOps/stays/{id}
+    // Input: id của Stay.
+    // =================================================
+    [HttpGet("{id:int}")]
+    public async Task<IActionResult> GetStayDetail(int id)
+    {
+        if (id <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Stay ID phải lớn hơn 0."
+            });
+        }
+
+        var stay = await _stayService.GetStayDetailAsync(id);
+
+        if (stay == null)
+        {
+            return NotFound(new
+            {
+                message = "Không tìm thấy Stay."
+            });
+        }
+
+        return Ok(stay);
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-06: Check-out
+    // POST /HotelOps/stays/{id}/check-out
+    // Header: X-Demo-Account-Id
+    // Điều kiện: Invoice Finalized và thanh toán đủ.
+    // =================================================
+    [HttpPost("{id:int}/check-out")]
+    [ProducesResponseType(typeof(CheckOutResponse), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<IActionResult> CheckOut(
+        int id,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? accountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "Đang chờ tích hợp JWT."
+            });
+        }
+
+        if (!accountId.HasValue || accountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        try
+        {
+            var result = await _stayService.CheckOutAsync(
+                id, accountId.Value);
+
+            return Ok(result);
+        }
+        catch (StayBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (InvoiceBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new
+            {
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
+            });
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new
+            {
+                message = "Xung đột dữ liệu khi check-out."
+            });
+        }
+    }
+}
+
+==================================================
+FILE: Controllers\InvoicesController.cs
+==================================================
+
+using HotelManagementSystem.DTOs.Invoices;
+using HotelManagementSystem.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace HotelManagementSystem.Controllers;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F07 - Invoice Management
+// UC-F07-04: Calculate & Finalize Invoice
+//
+// Swagger: https://localhost:7024/swagger
+// POST /HotelOps/stays/{stayId}/invoice/calculate
+// POST /HotelOps/stays/{stayId}/invoice/finalize
+// Header: X-Demo-Account-Id
+// =====================================================
+
+[ApiController]
+[Route("HotelOps/stays/{stayId:int}/invoice")]
+public class InvoicesController : ControllerBase
+{
+    private readonly InvoiceService _service;
+    private readonly IWebHostEnvironment _environment;
+
+    public InvoicesController(
+        InvoiceService service,
+        IWebHostEnvironment environment)
+    {
+        _service = service;
+        _environment = environment;
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-04: Calculate Invoice
+    // POST /HotelOps/stays/{stayId}/invoice/calculate
+    // =================================================
+    [HttpPost("calculate")]
+    [ProducesResponseType(typeof(InvoiceResultDto), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<IActionResult> Calculate(
+        int stayId,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? demoAccountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "API đang chờ tích hợp JWT."
+            });
+        }
+
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        try
+        {
+            var result = await _service.CalculateAsync(
+                stayId,
+                demoAccountId.Value);
+
+            return Ok(result);
+        }
+        catch (InvoiceBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new
+            {
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
+            });
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new
+            {
+                message = "Xung đột dữ liệu khi tính hóa đơn."
+            });
+        }
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-04: Finalize Invoice
+    // POST /HotelOps/stays/{stayId}/invoice/finalize
+    // =================================================
+    [HttpPost("finalize")]
+    [ProducesResponseType(typeof(InvoiceResultDto), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<IActionResult> Finalize(
+        int stayId,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? demoAccountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "API đang chờ tích hợp JWT."
+            });
+        }
+
+        if (!demoAccountId.HasValue ||
+            demoAccountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        try
+        {
+            var result = await _service.FinalizeAsync(
+                stayId,
+                demoAccountId.Value);
+
+            return Ok(result);
+        }
+        catch (InvoiceBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new
+            {
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
+            });
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new
+            {
+                message = "Xung đột dữ liệu khi chốt hóa đơn."
+            });
+        }
+    }
+}
+
+==================================================
+FILE: Controllers\PaymentsController.cs
+==================================================
+
+using HotelManagementSystem.DTOs.Payments;
+using HotelManagementSystem.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace HotelManagementSystem.Controllers;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Module: F07 - Payment Management
+// UC-F07-05: Record Internal Payment
+//
+// Swagger: https://localhost:7024/swagger
+// POST /HotelOps/invoices/{invoiceId}/payments
+// Header: X-Demo-Account-Id
+// Body: RecordPaymentRequest
+// =====================================================
+
+[ApiController]
+[Route("HotelOps/invoices/{invoiceId:int}/payments")]
+public class PaymentsController : ControllerBase
+{
+    private readonly PaymentService _service;
+    private readonly IWebHostEnvironment _environment;
+
+    public PaymentsController(
+        PaymentService service,
+        IWebHostEnvironment environment)
+    {
+        _service = service;
+        _environment = environment;
+    }
+
+    // =================================================
+    // Developer: NhaNTCE181298
+    // UC-F07-05: Record Internal Payment
+    // POST /HotelOps/invoices/{invoiceId}/payments
+    // =================================================
+    [HttpPost]
+    [ProducesResponseType(typeof(PaymentResultDto), 201)]
+    [ProducesResponseType(typeof(PaymentResultDto), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
+    public async Task<IActionResult> Record(
+        int invoiceId,
+        [FromBody] RecordPaymentRequest request,
+        [FromHeader(Name = "X-Demo-Account-Id")]
+        int? accountId)
+    {
+        if (!_environment.IsDevelopment())
+        {
+            return StatusCode(503, new
+            {
+                message = "Đang chờ tích hợp JWT."
+            });
+        }
+
+        if (!accountId.HasValue || accountId.Value <= 0)
+        {
+            return BadRequest(new
+            {
+                message = "Thiếu X-Demo-Account-Id hợp lệ."
+            });
+        }
+
+        try
+        {
+            var result = await _service.RecordAsync(
+                invoiceId,
+                request,
+                accountId.Value);
+
+            // Giao dịch đã tồn tại: trả về kết quả cũ.
+            if (result.Message ==
+                "Giao dịch đã được ghi nhận trước đó.")
+            {
+                return Ok(result);
+            }
+
+            // Giao dịch mới được ghi nhận.
+            return StatusCode(201, result);
+        }
+        catch (InvoiceBusinessException ex)
+        {
+            return StatusCode(ex.StatusCode, new
+            {
+                message = ex.Message
+            });
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict(new
+            {
+                message = "Dữ liệu đã thay đổi, vui lòng thử lại."
+            });
+        }
+        catch (DbUpdateException)
+        {
+            return Conflict(new
+            {
+                message = "Xung đột thanh toán hoặc IdempotencyKey."
+            });
+        }
+    }
+}
+
+==================================================
+FILE: Repositories\Interfaces\IStayRepository.cs
+==================================================
+
+using HotelManagementSystem.DTOs.Stays;
+using HotelManagementSystem.Entities;
+using Microsoft.EntityFrameworkCore.Storage;
+
+namespace HotelManagementSystem.Repositories.Interfaces;
+
+// =====================================================
+// Developer: NhaNT
+// Module: F07 - Stay Management
+// Layer: Repository
+//
+// UC-F07-01: Kiểm tra điều kiện nhận phòng.
+// UC-F07-02: Truy vấn danh sách Stay.
+// UC-F07-03: Truy vấn chi tiết Stay.
+// UC-F07-06: Cập nhật dữ liệu trả phòng.
+// UC-F07-07: Truy vấn lọc và tìm kiếm.
+//
+//
+// Repository chỉ truy cập dữ liệu bằng EF Core.
+// =====================================================
+public interface IStayRepository
+{
+    // NhaNT | F07-01, F07-06
+    // Transaction chung cho Stay, Reservation và AuditLog.
+    Task<IDbContextTransaction> BeginTransactionAsync();
+
+    // NhaNT | F07-01, F07-06
+    // Lấy tài khoản để kiểm tra quyền Receptionist.
+    Task<Account?> GetAccountAsync(int accountId);
+
+    // NhaNT | F07-01
+    // Lấy đặt phòng cùng thông tin phòng và khách.
+    Task<Reservation?> GetReservationForCheckInAsync(
+        int reservationId);
+
+    // NhaNT | F07-01
+    // Kiểm tra phòng đã có khách nhận hay chưa.
+    Task<bool> HasActiveStayAsync(int roomId);
+
+    // NhaNT | F07-01
+    // Kiểm tra phòng bị khóa hoặc bảo trì.
+    Task<bool> IsRoomBlockedAsync(
+        int roomId, DateTime now);
+
+    // NhaNT | F07-01
+    // Đếm số khách còn hiệu lực trong Database.
+    Task<int> CountValidGuestsAsync(List<int> guestIds);
+
+    // NhaNT | F07-01
+    // Chống check-in trùng Reservation.
+    Task<bool> HasStayForReservationAsync(
+        int reservationId);
+
+    // NhaNT | F07-01
+    // Thêm Stay và StayGuests thông qua navigation.
+    void AddStay(Stay stay);
+
+    // NhaNT | F07-02, F07-07
+    IQueryable<StayListDto> QueryStayViews();
+
+    // NhaNT | F07-03
+    // Lấy thông tin chi tiết Stay.
+    Task<StayDetailDto?> GetStayDetailAsync(int stayId);
+
+    // NhaNT | F07-03
+    // Lấy danh sách khách thực tế nhận phòng.
+    Task<List<StayGuestDetailDto>> GetStayGuestsAsync(
+        int stayId);
+
+    // NhaNT | F07-03
+    // Lấy dịch vụ chưa bị xóa mềm.
+    Task<List<StayServiceUsageDetailDto>>
+        GetStayServiceUsagesAsync(int stayId);
+
+    // NhaNT | F07-06
+    // Lấy Stay, Reservation, Room để check-out.
+    Task<Stay?> GetStayForCheckOutAsync(int stayId);
+
+    // NhaNT | F07-06
+    // Lấy hóa đơn của Stay.
+    Task<Invoice?> GetInvoiceByStayIdAsync(int stayId);
+
+    // NhaNT | F07-06
+    // Tổng số tiền đã thanh toán.
+    Task<decimal> GetTotalPaidAsync(int invoiceId);
+
+    // NhaNT | F07-01, F07-06
+    // Thêm nhật ký nghiệp vụ.
+    void AddAuditLog(AuditLog auditLog);
+
+    // NhaNT | F07-01, F07-06
+    // Lưu thay đổi bằng EF Core.
+    Task<int> SaveChangesAsync();
+}
+
+==================================================
+FILE: Repositories\Interfaces\IInvoiceRepository.cs
+==================================================
+
+using HotelManagementSystem.Entities;
+using Microsoft.EntityFrameworkCore.Storage;
+
+namespace HotelManagementSystem.Repositories.Interfaces;
+
+// =====================================================
+// Developer: NhaNT
+// UC-F07-04: Calculate & Finalize Invoice
+// Repository quản lý dữ liệu hóa đơn.
+//
+// TEST SWAGGER: https://localhost:7024/swagger
+// POST /api/stays/{stayId}/invoice/calculate
+// POST /api/stays/{stayId}/invoice/finalize
+//
+// Header: X-Demo-Account-Id (Development)
+// =====================================================
+
+public interface IInvoiceRepository
+{
+    // NhaNT | F07-04 - Transaction chung.
+    Task<IDbContextTransaction> BeginTransactionAsync();
+
+    // NhaNT | F07-04 - Tài khoản thực hiện.
+    Task<Account?> GetAccountAsync(int accountId);
+
+    // NhaNT | F07-04 - Stay cùng dữ liệu liên quan.
+    Task<Stay?> GetStayAsync(int stayId);
+
+    // NhaNT | F07-04 - Lượt sử dụng còn hiệu lực.
+    Task<List<ServiceUsage>> GetUsagesAsync(int stayId);
+
+    // NhaNT | F07-04 - Hóa đơn của Stay.
+    Task<Invoice?> GetInvoiceAsync(int stayId);
+
+    // NhaNT | F07-04 - Kiểm tra đã thanh toán.
+    Task<bool> HasPaymentsAsync(int invoiceId);
+
+    // NhaNT | F07-04 - Lấy dòng hóa đơn.
+    Task<List<InvoiceLine>> GetLinesAsync(int invoiceId);
+
+    // NhaNT | F07-04 - Đọc dòng phí không tracking.
+    Task<List<InvoiceLine>> GetLinesReadOnlyAsync(int invoiceId);
+
+    // NhaNT | F07-04 - Tổng tiền từ SQL Server.
+    Task<decimal> GetLineTotalAsync(int invoiceId);
+
+    // NhaNT | F07-04 - Thêm hóa đơn.
+    void AddInvoice(Invoice invoice);
+
+    // NhaNT | F07-04 - Thêm dòng chi phí.
+    void AddLine(InvoiceLine line);
+
+    // NhaNT | F07-04 - Xóa dòng hóa đơn nháp.
+    void RemoveLines(IEnumerable<InvoiceLine> lines);
+
+    // NhaNT | F07-04 - Ghi lịch sử thao tác.
+    void AddAuditLog(AuditLog auditLog);
+
+    // NhaNT | F07-04 - Lưu dữ liệu.
+    Task<int> SaveChangesAsync();
+}
+
+==================================================
+FILE: Repositories\Interfaces\IPaymentRepository.cs
+==================================================
+
+using HotelManagementSystem.Entities;
+using Microsoft.EntityFrameworkCore.Storage;
+
+namespace HotelManagementSystem.Repositories.Interfaces;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC-F07-05: Record Internal Payment
+// Interface truy cập dữ liệu thanh toán.
+//
+// Swagger: https://localhost:7024/swagger
+// POST /api/invoices/{invoiceId}/payments
+// =====================================================
+
+public interface IPaymentRepository
+{
+    // NhaNT | F07-05 - Transaction Serializable.
+    Task<IDbContextTransaction> BeginTransactionAsync();
+
+    // NhaNT | F07-05 - Kiểm tra tài khoản.
+    Task<Account?> GetAccountAsync(int accountId);
+
+    // NhaNT | F07-05 - Kiểm tra giao dịch trùng.
+    Task<Payment?> GetByIdempotencyKeyAsync(Guid key);
+
+    // NhaNT | F07-05 - Lấy hóa đơn.
+    Task<Invoice?> GetInvoiceAsync(int invoiceId);
+
+    // NhaNT | F07-05 - Tổng số tiền đã trả.
+    Task<decimal> GetTotalPaidAsync(int invoiceId);
+
+    // NhaNT | F07-05 - Tạo phiếu thanh toán.
+    void AddPayment(Payment payment);
+
+    // NhaNT | F07-05 - Lưu lịch sử thao tác.
+    void AddAuditLog(AuditLog auditLog);
+
+    // NhaNT | F07-05 - Lưu vào Database.
+    Task<int> SaveChangesAsync();
+}
+
+==================================================
+FILE: DTOs\Stays\CheckInRequest.cs
+==================================================
+
+using System.ComponentModel.DataAnnotations;
+
+namespace HotelManagementSystem.DTOs.Stays;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC: UC-F07-01 - Check-in
+// Mô tả: Nhận thông tin đặt phòng và danh sách
+// khách thực tế đến nhận phòng.
+// =====================================================
+
+public class CheckInRequest
+{
+    [Range(1, int.MaxValue)]
+    public int ReservationId { get; set; }
+
+    [Required]
+    [MinLength(1)]
+    public List<int> GuestIds { get; set; } = new();
+
+    [MaxLength(1000)]
+    public string? Notes { get; set; }
+}
+
+==================================================
+FILE: DTOs\Stays\CheckInResponse.cs
+==================================================
+
+namespace HotelManagementSystem.DTOs.Stays;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC: UC-F07-01 - Check-in
+// Mô tả: Trả thông tin Stay sau khi nhận phòng.
+// =====================================================
+
+public class CheckInResponse
+{
+    public int StayId { get; set; }
+    public string StayCode { get; set; } = string.Empty;
+
+    public int ReservationId { get; set; }
+    public string ReservationCode { get; set; } = string.Empty;
+
+    public int RoomId { get; set; }
+    public string RoomCode { get; set; } = string.Empty;
+
+    public int MainGuestId { get; set; }
+    public List<int> GuestIds { get; set; } = new();
+
+    public DateTime CheckedInAt { get; set; }
+    public int CheckedInByAccountId { get; set; }
+
+    public string ReservationStatus { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+}
+
+==================================================
+FILE: DTOs\Stays\CheckOutResponse.cs
+==================================================
+
+namespace HotelManagementSystem.DTOs.Stays;
+
+// Developer: NhaNTCE181298
+// UC-F07-06: Check-out
+
+public class CheckOutResponse
+{
+    public int StayId { get; set; }
+    public string StayCode { get; set; } = "";
+    public int ReservationId { get; set; }
+    public int RoomId { get; set; }
+    public string RoomCode { get; set; } = "";
+    public DateTime CheckedOutAt { get; set; }
+    public int CheckedOutByAccountId { get; set; }
+    public decimal InvoiceTotal { get; set; }
+    public decimal TotalPaid { get; set; }
+    public string ReservationStatus { get; set; } = "";
+    public string HousekeepingStatus { get; set; } = "";
+    public string Message { get; set; } = "";
+}
+
+==================================================
+FILE: DTOs\Stays\StayDetailDto.cs
+==================================================
+
+namespace HotelManagementSystem.DTOs.Stays;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC: UC-F07-03 - View Stay Details
+// Mô tả: DTO trả thông tin chi tiết một Stay.
+// =====================================================
+
+public class StayDetailDto
+{
+    public int Id { get; set; }
+    public string StayCode { get; set; } = string.Empty;
+
+    // Reservation
+    public int ReservationId { get; set; }
+    public string ReservationCode { get; set; } = string.Empty;
+    public DateOnly CheckInDate { get; set; }
+    public DateOnly CheckOutDate { get; set; }
+    public int NumberOfGuests { get; set; }
+    public decimal NightlyRate { get; set; }
+
+    // Room
+    public int RoomId { get; set; }
+    // Developer: NhaNTCE181298
+    // UC-F07-03: Khởi tạo RoomCode để tránh CS8618.
+    public string RoomCode { get; set; } = string.Empty;
+
+    // Stay
+    public DateTime CheckedInAt { get; set; }
+    public DateTime? CheckedOutAt { get; set; }
+    public int CheckedInByAccountId { get; set; }
+    public int? CheckedOutByAccountId { get; set; }
+    public string? Notes { get; set; }
+    public string Status { get; set; } = string.Empty;
+
+    // Related data
+    public List<StayGuestDetailDto> Guests { get; set; } = new();
+    public List<StayServiceUsageDetailDto> ServiceUsages { get; set; } = new();
+}
+
+public class StayGuestDetailDto
+{
+    public int GuestId { get; set; }
+    public string FullName { get; set; } = string.Empty;
+    public bool IsMainGuest { get; set; }
+}
+
+public class StayServiceUsageDetailDto
+{
+    public int Id { get; set; }
+    public int HotelServiceId { get; set; }
+    public string ServiceName { get; set; } = string.Empty;
+    public string Unit { get; set; } = string.Empty;
+    public decimal Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal Amount { get; set; }
+    public DateTime UsedAt { get; set; }
+}
+
+==================================================
+FILE: DTOs\Stays\StayListDto.cs
+==================================================
+
+namespace HotelManagementSystem.DTOs.Stays;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// UC: UC-F07-02 - View Stays
+// Mô tả: Trả thông tin Stay, phòng, khách đại diện
+// và trạng thái lưu trú.
+// =====================================================
+
+public class StayListDto
+{
+    public int Id { get; set; }
+    public string StayCode { get; set; } = string.Empty;
+
+    public int ReservationId { get; set; }
+    public string ReservationCode { get; set; } = string.Empty;
+
+    public int RoomId { get; set; }
+    public string RoomCode { get; set; } = string.Empty;
+
+    public int MainGuestId { get; set; }
+    public string MainGuestName { get; set; } = string.Empty;
+
+    public DateTime CheckedInAt { get; set; }
+    public DateTime? CheckedOutAt { get; set; }
+
+    public string Status { get; set; } = string.Empty;
+}
+
+==================================================
+FILE: DTOs\Invoices\InvoiceResultDto.cs
+==================================================
+
+namespace HotelManagementSystem.DTOs.Invoices;
+
+// Developer: NhaNTCE181298
+// UC-F07-04: Kết quả tính phí và chốt hóa đơn.
+
+public class InvoiceLineResultDto
+{
+    public int Id { get; set; }
+    public string LineType { get; set; } = "";
+    public int? ServiceUsageId { get; set; }
+    public string Description { get; set; } = "";
+    public string Unit { get; set; } = "";
+    public decimal Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal Amount { get; set; }
+}
+
+public class InvoiceResultDto
+{
+    public int Id { get; set; }
+    public string InvoiceCode { get; set; } = "";
+    public int StayId { get; set; }
+    public string StayCode { get; set; } = "";
+    public string Status { get; set; } = "";
+    public DateOnly BillingFromDate { get; set; }
+    public DateOnly BillingToDate { get; set; }
+    public string GuestName { get; set; } = "";
+    public string RoomCode { get; set; } = "";
+    public decimal RoomAmount { get; set; }
+    public decimal ServiceAmount { get; set; }
+    public decimal TotalAmount { get; set; }
+    public DateTime? FinalizedAt { get; set; }
+    public List<InvoiceLineResultDto> Lines { get; set; } = new();
+}
+
+==================================================
+FILE: DTOs\Payments\RecordPaymentRequest.cs
+==================================================
+
+using System.ComponentModel.DataAnnotations;
+using HotelManagementSystem.Entities.Enums;
+
+namespace HotelManagementSystem.DTOs.Payments;
+
+// Developer: NhaNTCE181298
+// UC-F07-05: Record Internal Payment
+
+public class RecordPaymentRequest
+{
+    [Required]
+    public Guid? IdempotencyKey { get; set; }
+
+    [Range(
+        typeof(decimal),
+        "0.01",
+        "9999999999999999.99",
+        ParseLimitsInInvariantCulture = true,
+        ErrorMessage = "Amount phải lớn hơn 0."
+    )]
+    public decimal Amount { get; set; }
+
+    [Required]
+    public PaymentMethod? Method { get; set; }
+
+    [MaxLength(100)]
+    public string? ReferenceNumber { get; set; }
+
+    [MaxLength(1000)]
+    public string? Notes { get; set; }
+}
+
+public class PaymentResultDto
+{
+    public int Id { get; set; }
+    public string ReceiptCode { get; set; } = "";
+    public int InvoiceId { get; set; }
+    public Guid IdempotencyKey { get; set; }
+    public decimal Amount { get; set; }
+    public string Method { get; set; } = "";
+    public DateTime PaidAt { get; set; }
+    public int RecordedByAccountId { get; set; }
+
+    public decimal InvoiceTotal { get; set; }
+    public decimal TotalPaid { get; set; }
+    public decimal RemainingAmount { get; set; }
+    public string Message { get; set; } = "";
+}
+
+==================================================
+FILE: Program.cs
+==================================================
+
+using HotelManagementSystem.Data;
+using HotelManagementSystem.Repositories.Implementations;
+using HotelManagementSystem.Repositories.Interfaces;
+using HotelManagementSystem.Services;
+using Microsoft.EntityFrameworkCore;
+
+namespace HotelManagementSystem;
+
+// =====================================================
+// Developer: NhaNTCE181298
+// Cấu hình Database, Swagger và Dependency Injection.
+// Module: DB-01, DB-02, F07, F09, F11
+// =====================================================
+
+public class Program
+{
+    public static void Main(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // ASP.NET Core Web API và Swagger
+        // =================================================
+
+        builder.Services.AddControllers();
+        builder.Services.AddEndpointsApiExplorer();
+        builder.Services.AddSwaggerGen();
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // DB-01, DB-02: EF Core và SQL Server
+        // =================================================
+
+        builder.Services.AddDbContext<AppDbContext>(options =>
+            options.UseSqlServer(
+                builder.Configuration.GetConnectionString(
+                    "DefaultConnection")));
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Dependency Injection: F07, F09, F11
+        // =================================================
+
+        // Repositories
+        builder.Services.AddScoped<IStayRepository, StayRepository>();
+        builder.Services.AddScoped<IInvoiceRepository, InvoiceRepository>();
+        builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
+        builder.Services.AddScoped<IServiceUsageRepository, ServiceUsageRepository>();
+        builder.Services.AddScoped<IReportRepository, ReportRepository>();
+
+        // Services
+        builder.Services.AddScoped<StayService>();
+        builder.Services.AddScoped<InvoiceService>();
+        builder.Services.AddScoped<PaymentService>();
+        builder.Services.AddScoped<ServiceUsageService>();
+        builder.Services.AddScoped<ReportService>();
+
+        var app = builder.Build();
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Swagger - Chỉ sử dụng trong Development
+        // =================================================
+
+        if (app.Environment.IsDevelopment())
+        {
+            app.UseSwagger();
+            app.UseSwaggerUI();
+        }
+
+        // =================================================
+        // Developer: NhaNTCE181298
+        // Middleware và API Routing
+        // =================================================
+
+        app.UseHttpsRedirection();
+        app.UseAuthorization();
+        app.MapControllers();
+
+        app.Run();
+    }
+}
+
